@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE=${ARCHANGEL_CONFIG:-/etc/archangel.conf}
+STATE_DIR=${ARCHANGEL_STATE_DIR:-/var/lib/archangel}
+GRANTS_FILE="$STATE_DIR/grants.tsv"
+PARENTS_FILE="$STATE_DIR/traversal.tsv"
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  sudo archangel-access status
+  sudo archangel-access grant <ro|rw> PATH
+  sudo archangel-access revoke PATH
+  sudo archangel-access check PATH
+  sudo archangel-access audit <read|write> [PATH]
+  sudo archangel-access journal <enable|disable>
+
+Archangel manages named POSIX ACL entries for the configured agent account.
+Grant/revoke paths must already exist. Symlink arguments are resolved to their
+target before access is changed.
+USAGE
+}
+
+die() {
+    printf 'archangel-access: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ ${EUID:-$(id -u)} -eq 0 ]] || die "run this command with sudo"
+}
+
+load_config() {
+    [[ -r "$CONFIG_FILE" ]] || die "missing $CONFIG_FILE; run install.sh first"
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+    : "${ARCHANGEL_AGENT_USER:?ARCHANGEL_AGENT_USER is not set}"
+    : "${ARCHANGEL_OWNER_USER:?ARCHANGEL_OWNER_USER is not set}"
+    getent passwd "$ARCHANGEL_AGENT_USER" >/dev/null || die "agent user '$ARCHANGEL_AGENT_USER' does not exist"
+}
+
+ensure_state() {
+    install -d -m 0750 "$STATE_DIR"
+    touch "$GRANTS_FILE" "$PARENTS_FILE"
+    chmod 0640 "$GRANTS_FILE" "$PARENTS_FILE"
+}
+
+validate_path_text() {
+    local path=$1
+    [[ "$path" != *$'\n'* && "$path" != *$'\t'* ]] || die "paths containing tabs or newlines are not supported"
+}
+
+resolve_existing_path() {
+    local input=$1
+    validate_path_text "$input"
+    realpath -e -- "$input" 2>/dev/null || die "path does not exist: $input"
+}
+
+as_agent_test() {
+    local flag=$1 path=$2
+    runuser -u "$ARCHANGEL_AGENT_USER" -- test "$flag" "$path"
+}
+
+record_grant() {
+    local mode=$1 path=$2 tmp
+    tmp=$(mktemp)
+    awk -F '\t' -v p="$path" '$2 != p' "$GRANTS_FILE" > "$tmp" || true
+    printf '%s\t%s\n' "$mode" "$path" >> "$tmp"
+    sort -u "$tmp" > "$GRANTS_FILE"
+    rm -f "$tmp"
+}
+
+remove_grant_record() {
+    local path=$1 tmp
+    tmp=$(mktemp)
+    awk -F '\t' -v p="$path" '$2 != p' "$GRANTS_FILE" > "$tmp" || true
+    cat "$tmp" > "$GRANTS_FILE"
+    rm -f "$tmp"
+}
+
+parent_is_needed() {
+    local parent=$1 mode path current
+    while IFS=$'\t' read -r mode path; do
+        [[ -n ${path:-} ]] || continue
+        current=$(dirname -- "$path")
+        while [[ "$current" != "/" ]]; do
+            [[ "$current" == "$parent" ]] && return 0
+            current=$(dirname -- "$current")
+        done
+    done < "$GRANTS_FILE"
+    return 1
+}
+
+ensure_parent_traversal() {
+    local path=$1 current
+    current=$(dirname -- "$path")
+    while [[ "$current" != "/" ]]; do
+        if ! as_agent_test -x "$current"; then
+            setfacl -m "u:${ARCHANGEL_AGENT_USER}:--x" -- "$current"
+            if ! grep -Fqx -- "$current" "$PARENTS_FILE"; then
+                printf '%s\n' "$current" >> "$PARENTS_FILE"
+            fi
+        fi
+        current=$(dirname -- "$current")
+    done
+    sort -u -o "$PARENTS_FILE" "$PARENTS_FILE"
+}
+
+cleanup_parent_traversal() {
+    local tmp parent
+    tmp=$(mktemp)
+    while IFS= read -r parent; do
+        [[ -n "$parent" ]] || continue
+        if parent_is_needed "$parent"; then
+            printf '%s\n' "$parent" >> "$tmp"
+        else
+            setfacl -x "u:${ARCHANGEL_AGENT_USER}" -- "$parent" 2>/dev/null || true
+        fi
+    done < "$PARENTS_FILE"
+    cat "$tmp" > "$PARENTS_FILE"
+    rm -f "$tmp"
+}
+
+apply_grant() {
+    local mode=$1 path=$2 dir_perm file_perm exec_perm
+    case "$mode" in
+        ro)
+            dir_perm='r-x'
+            file_perm='r--'
+            exec_perm='r-x'
+            ;;
+        rw)
+            dir_perm='rwx'
+            file_perm='rw-'
+            exec_perm='rwx'
+            ;;
+        *) die "mode must be 'ro' or 'rw'" ;;
+    esac
+
+    ensure_parent_traversal "$path"
+
+    if [[ -d "$path" ]]; then
+        while IFS= read -r -d '' item; do
+            setfacl -m "u:${ARCHANGEL_AGENT_USER}:${dir_perm}" -- "$item"
+            setfacl -m "d:u:${ARCHANGEL_AGENT_USER}:${dir_perm}" -- "$item"
+        done < <(find "$path" -type d -print0)
+
+        while IFS= read -r -d '' item; do
+            if [[ -x "$item" ]]; then
+                setfacl -m "u:${ARCHANGEL_AGENT_USER}:${exec_perm}" -- "$item"
+            else
+                setfacl -m "u:${ARCHANGEL_AGENT_USER}:${file_perm}" -- "$item"
+            fi
+        done < <(find "$path" -type f -print0)
+    elif [[ -f "$path" ]]; then
+        if [[ -x "$path" ]]; then
+            setfacl -m "u:${ARCHANGEL_AGENT_USER}:${exec_perm}" -- "$path"
+        else
+            setfacl -m "u:${ARCHANGEL_AGENT_USER}:${file_perm}" -- "$path"
+        fi
+    else
+        die "only regular files and directories are supported in this first version"
+    fi
+
+    record_grant "$mode" "$path"
+}
+
+remove_acl_from_path() {
+    local path=$1
+    if [[ -d "$path" ]]; then
+        while IFS= read -r -d '' item; do
+            setfacl -x "u:${ARCHANGEL_AGENT_USER}" -- "$item" 2>/dev/null || true
+            setfacl -x "d:u:${ARCHANGEL_AGENT_USER}" -- "$item" 2>/dev/null || true
+        done < <(find "$path" -type d -print0)
+        while IFS= read -r -d '' item; do
+            setfacl -x "u:${ARCHANGEL_AGENT_USER}" -- "$item" 2>/dev/null || true
+        done < <(find "$path" -type f -print0)
+    else
+        setfacl -x "u:${ARCHANGEL_AGENT_USER}" -- "$path" 2>/dev/null || true
+    fi
+}
+
+cmd_status() {
+    printf 'Archangel access status\n\n'
+    printf 'Agent user: %s\n' "$ARCHANGEL_AGENT_USER"
+    printf 'Owner user: %s\n' "$ARCHANGEL_OWNER_USER"
+    printf 'Identity:   '
+    id "$ARCHANGEL_AGENT_USER"
+    printf 'Journal:    '
+    if id -nG "$ARCHANGEL_AGENT_USER" | tr ' ' '\n' | grep -qx systemd-journal; then
+        printf 'enabled\n'
+    else
+        printf 'not enabled\n'
+    fi
+
+    printf '\nManaged grants:\n'
+    if [[ -s "$GRANTS_FILE" ]]; then
+        awk -F '\t' '{printf "  %-2s  %s\n", toupper($1), $2}' "$GRANTS_FILE"
+    else
+        printf '  (none)\n'
+    fi
+
+    printf '\nManaged traversal ACLs:\n'
+    if [[ -s "$PARENTS_FILE" ]]; then
+        sed 's/^/  X   /' "$PARENTS_FILE"
+    else
+        printf '  (none)\n'
+    fi
+
+    printf '\nSudo policy for %s:\n' "$ARCHANGEL_AGENT_USER"
+    sudo -l -U "$ARCHANGEL_AGENT_USER" 2>&1 | sed 's/^/  /' || true
+}
+
+cmd_grant() {
+    [[ $# -eq 2 ]] || die "grant requires <ro|rw> PATH"
+    local mode=$1 path
+    path=$(resolve_existing_path "$2")
+    [[ "$path" != "/" ]] || die "refusing to manage ACLs recursively on /"
+    printf 'Granting %s access to %s for %s\n' "$mode" "$path" "$ARCHANGEL_AGENT_USER"
+    apply_grant "$mode" "$path"
+    printf 'Done. Verify with: sudo archangel-access check %q\n' "$path"
+}
+
+cmd_revoke() {
+    [[ $# -eq 1 ]] || die "revoke requires PATH"
+    local path
+    path=$(resolve_existing_path "$1")
+    if ! awk -F '\t' -v p="$path" '$2 == p {found=1} END {exit !found}' "$GRANTS_FILE"; then
+        die "$path is not a managed Archangel grant"
+    fi
+    remove_acl_from_path "$path"
+    remove_grant_record "$path"
+    cleanup_parent_traversal
+    printf 'Revoked managed access to %s\n' "$path"
+}
+
+cmd_check() {
+    [[ $# -eq 1 ]] || die "check requires PATH"
+    local path
+    path=$(resolve_existing_path "$1")
+    printf '%s\n\n' "$path"
+    printf 'read:       '; as_agent_test -r "$path" && printf 'YES\n' || printf 'NO\n'
+    printf 'write:      '; as_agent_test -w "$path" && printf 'YES\n' || printf 'NO\n'
+    if [[ -d "$path" ]]; then
+        printf 'traverse:   '; as_agent_test -x "$path" && printf 'YES\n' || printf 'NO\n'
+        printf 'list dir:   '
+        if runuser -u "$ARCHANGEL_AGENT_USER" -- ls -A -- "$path" >/dev/null 2>&1; then
+            printf 'YES\n'
+        else
+            printf 'NO\n'
+        fi
+    else
+        printf 'execute:    '; as_agent_test -x "$path" && printf 'YES\n' || printf 'NO\n'
+    fi
+}
+
+cmd_audit() {
+    [[ $# -ge 1 && $# -le 2 ]] || die "audit requires <read|write> [PATH]"
+    local mode=$1 root=${2:-/} predicate
+    root=$(resolve_existing_path "$root")
+    case "$mode" in
+        read) predicate='-readable' ;;
+        write) predicate='-writable' ;;
+        *) die "audit mode must be 'read' or 'write'" ;;
+    esac
+
+    if [[ "$root" == "/" ]]; then
+        printf 'Note: skipping /proc, /sys, /dev, and /run in the system-wide audit.\n' >&2
+        runuser -u "$ARCHANGEL_AGENT_USER" -- find / \
+            \( -path /proc -o -path /sys -o -path /dev -o -path /run \) -prune -o \
+            "$predicate" -print 2>/dev/null
+    else
+        runuser -u "$ARCHANGEL_AGENT_USER" -- find "$root" "$predicate" -print 2>/dev/null
+    fi
+}
+
+cmd_journal() {
+    [[ $# -eq 1 ]] || die "journal requires enable or disable"
+    getent group systemd-journal >/dev/null || die "systemd-journal group does not exist on this system"
+    case "$1" in
+        enable)
+            usermod -aG systemd-journal "$ARCHANGEL_AGENT_USER"
+            printf 'Journal access enabled. Existing agent processes must be restarted to receive the new group membership.\n'
+            ;;
+        disable)
+            gpasswd -d "$ARCHANGEL_AGENT_USER" systemd-journal >/dev/null 2>&1 || true
+            printf 'Journal access disabled. Existing agent processes must be restarted to drop the group membership.\n'
+            ;;
+        *) die "journal requires enable or disable" ;;
+    esac
+}
+
+main() {
+    require_root
+    command -v setfacl >/dev/null 2>&1 || die "setfacl not found; install the acl package"
+    command -v runuser >/dev/null 2>&1 || die "runuser not found"
+    load_config
+    ensure_state
+
+    local command=${1:-help}
+    shift || true
+    case "$command" in
+        status) [[ $# -eq 0 ]] || die "status takes no arguments"; cmd_status ;;
+        grant) cmd_grant "$@" ;;
+        revoke) cmd_revoke "$@" ;;
+        check) cmd_check "$@" ;;
+        audit) cmd_audit "$@" ;;
+        journal) cmd_journal "$@" ;;
+        help|-h|--help) usage ;;
+        *) usage; die "unknown command: $command" ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,21 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editor/OS noise
+*~
+*.swp
+*.swo
+.DS_Store
+
+# Runtime/test output
+*.log
+tmp/
+dist/
+.archangel-local/
+
+# Python helpers, if we add any
+__pycache__/
+*.py[cod]
+.venv/

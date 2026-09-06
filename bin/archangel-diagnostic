@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -u
+
+section() {
+    printf '\n== %s ==\n' "$1"
+}
+
+run_if_available() {
+    local command_name=$1
+    shift
+    if command -v "$command_name" >/dev/null 2>&1; then
+        "$@"
+    else
+        printf '%s not available\n' "$command_name"
+    fi
+}
+
+section "Identity"
+id
+printf 'hostname: %s\n' "$(hostname 2>/dev/null || printf unknown)"
+printf 'kernel:   %s\n' "$(uname -srmo 2>/dev/null || printf unknown)"
+
+section "Uptime and memory"
+uptime 2>/dev/null || true
+run_if_available free free -h
+
+section "Filesystems"
+if command -v df >/dev/null 2>&1; then
+    df -hT -x tmpfs -x devtmpfs 2>/dev/null || df -h 2>/dev/null || true
+fi
+
+section "Failed systemd units"
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --failed --no-pager 2>&1 || true
+else
+    printf 'systemctl not available\n'
+fi
+
+section "Current-boot warnings and errors (last 50)"
+if command -v journalctl >/dev/null 2>&1; then
+    if ! journalctl -b -p warning --no-pager -n 50 2>&1; then
+        printf 'Journal is not readable by this user. Archangel can grant journal access separately.\n'
+    fi
+else
+    printf 'journalctl not available\n'
+fi
+
+section "Package hints"
+if command -v pacman >/dev/null 2>&1; then
+    printf 'package manager: pacman\n'
+    orphan_count=$(pacman -Qdtq 2>/dev/null | wc -l)
+    printf 'orphan packages: %s\n' "$orphan_count"
+elif command -v dpkg >/dev/null 2>&1; then
+    printf 'package manager: dpkg/apt\n'
+    dpkg --audit 2>&1 || true
+elif command -v rpm >/dev/null 2>&1; then
+    printf 'package manager: rpm\n'
+    rpm -Va --nomtime --nosize --nomd5 2>/dev/null | head -n 25 || true
+else
+    printf 'No supported package-manager diagnostic detected.\n'
+fi
+
+section "Done"
+printf 'This diagnostic is read-only. Review the output before taking corrective action.\n'
