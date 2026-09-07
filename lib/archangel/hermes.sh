@@ -37,10 +37,11 @@ archangel_hermes_python() {
 }
 
 archangel_run_as_agent() {
-    local home uid runtime_dir
+    local home uid runtime_root runtime_dir
     home=$(archangel_agent_home)
     uid=$(archangel_agent_uid)
-    runtime_dir="/run/user/$uid"
+    runtime_root=${ARCHANGEL_RUNTIME_ROOT:-/run/user}
+    runtime_dir="$runtime_root/$uid"
 
     local -a env_args=(
         "HOME=$home"
@@ -55,7 +56,9 @@ archangel_run_as_agent() {
         fi
     fi
 
-    runuser -u "$ARCHANGEL_AGENT_USER" -- env "${env_args[@]}" \
+    runuser -u "$ARCHANGEL_AGENT_USER" -- env \
+        -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS \
+        "${env_args[@]}" \
         bash -c 'cd "$HOME" && exec "$@"' archangel-agent "$@"
 }
 
@@ -66,9 +69,10 @@ archangel_prepare_user_systemd() {
     [[ -d /run/systemd/system ]] || return 0
     command -v systemctl >/dev/null 2>&1 || return 0
 
-    local uid runtime_dir
+    local uid runtime_root runtime_dir
     uid=$(archangel_agent_uid)
-    runtime_dir="/run/user/$uid"
+    runtime_root=${ARCHANGEL_RUNTIME_ROOT:-/run/user}
+    runtime_dir="$runtime_root/$uid"
 
     if [[ "$enable_linger" == yes && ! -e "/var/lib/systemd/linger/$ARCHANGEL_AGENT_USER" ]]; then
         if command -v loginctl >/dev/null 2>&1; then
