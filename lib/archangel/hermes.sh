@@ -26,7 +26,7 @@ archangel_run_as_agent() {
     runuser -u "$ARCHANGEL_AGENT_USER" -- env \
         HOME="$home" USER="$ARCHANGEL_AGENT_USER" LOGNAME="$ARCHANGEL_AGENT_USER" \
         PATH="$home/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-        "$@"
+        bash -c 'cd "$HOME" && exec "$@"' archangel-agent "$@"
 }
 
 archangel_install_package_for_command() {
