@@ -39,6 +39,7 @@ agent_created=unknown
 journal_was_member=unknown
 acl_installed_by_archangel=unknown
 hermes_installed_by_archangel=unknown
+linger_enabled_by_archangel=unknown
 hermes_bin=
 hermes_home=
 if [[ -r "$INSTALL_STATE" ]]; then
@@ -48,6 +49,7 @@ if [[ -r "$INSTALL_STATE" ]]; then
     journal_was_member=${ARCHANGEL_JOURNAL_WAS_MEMBER:-unknown}
     acl_installed_by_archangel=${ARCHANGEL_ACL_INSTALLED_BY_ARCHANGEL:-unknown}
     hermes_installed_by_archangel=${ARCHANGEL_HERMES_INSTALLED:-unknown}
+    linger_enabled_by_archangel=${ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL:-unknown}
     hermes_bin=${ARCHANGEL_HERMES_BIN:-}
     hermes_home=${ARCHANGEL_HERMES_HOME:-}
 fi
@@ -135,6 +137,22 @@ if [[ "$remove_agent" == no && "$hermes_installed_by_archangel" == yes ]] && get
     fi
 fi
 
+linger_left_enabled=no
+if [[ "$linger_enabled_by_archangel" == yes ]] && getent passwd "$ARCHANGEL_AGENT_USER" >/dev/null && command -v loginctl >/dev/null 2>&1; then
+    if [[ "$remove_agent" == yes ]]; then
+        say "Disabling systemd linger that Archangel enabled for '$ARCHANGEL_AGENT_USER'."
+        loginctl disable-linger "$ARCHANGEL_AGENT_USER" || \
+            say "Could not disable systemd linger; inspect it manually after uninstall."
+    elif [[ -e "/var/lib/systemd/linger/$ARCHANGEL_AGENT_USER" ]]; then
+        if yes_no "Disable systemd linger that Archangel enabled for the preserved account '$ARCHANGEL_AGENT_USER'?" N; then
+            loginctl disable-linger "$ARCHANGEL_AGENT_USER" || \
+                say "Could not disable systemd linger; leaving it for manual review."
+        else
+            linger_left_enabled=yes
+        fi
+    fi
+fi
+
 if [[ "$remove_agent" == yes ]]; then
     if command -v pgrep >/dev/null 2>&1 && pgrep -u "$ARCHANGEL_AGENT_USER" >/dev/null 2>&1; then
         yes_no "Terminate processes still running as '$ARCHANGEL_AGENT_USER'?" Y || die "cannot remove an account while its processes are intentionally left running"
@@ -174,6 +192,13 @@ if getent passwd "$ARCHANGEL_AGENT_USER" >/dev/null 2>&1; then
     say
 fi
 
+if [[ "$linger_left_enabled" == yes ]]; then
+    say "- systemd linger: remains enabled for '$ARCHANGEL_AGENT_USER' because you chose to preserve it."
+    say "  To disable it later:"
+    say "    sudo loginctl disable-linger '$ARCHANGEL_AGENT_USER'"
+    say
+fi
+
 case "$acl_installed_by_archangel" in
     yes)
         say "- ACL package: Archangel installed the distro's 'acl' package and left it installed."
@@ -185,7 +210,7 @@ case "$acl_installed_by_archangel" in
 esac
 
 if [[ "$hermes_installed_by_archangel" == no ]]; then
-    say "- Hermes: it existed before Archangel and was left untouched."
+    say "- Hermes: it was not installed by Archangel and was left untouched."
     say
 elif [[ "$hermes_installed_by_archangel" == yes && "$remove_agent" == no && -n "$hermes_home" && -d "$hermes_home" ]]; then
     say "- Hermes data/configuration may remain at $hermes_home. The upstream runtime uninstaller keeps"
