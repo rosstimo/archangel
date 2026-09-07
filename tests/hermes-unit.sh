@@ -10,6 +10,7 @@ outside="$tmp/human-checkout"
 mkdir -p "$agent_home" "$outside"
 
 ARCHANGEL_AGENT_USER=testagent
+ARCHANGEL_RUNTIME_ROOT="$tmp/run-user"
 STATE_DIR="$tmp/state"
 
 say() { :; }
@@ -39,9 +40,16 @@ runuser() {
 # shellcheck disable=SC1091
 source "$ROOT/lib/archangel/hermes.sh"
 
+# Simulate a human interactive session leaking its own user-bus environment
+# into the privileged installer. The agent wrapper must strip these values
+# unless the agent's own runtime bus exists.
+export XDG_RUNTIME_DIR=/run/user/9999
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/9999/bus
+
 cd "$outside"
 actual_pwd=$(archangel_run_as_agent pwd)
 actual_home=$(archangel_run_as_agent sh -c 'printf %s "$HOME"')
+actual_bus_env=$(archangel_run_as_agent sh -c 'printf "%s|%s" "${XDG_RUNTIME_DIR-}" "${DBUS_SESSION_BUS_ADDRESS-}"')
 
 [[ "$actual_pwd" == "$agent_home" ]] || {
     printf 'FAIL: agent command ran from %s, expected %s\n' "$actual_pwd" "$agent_home" >&2
@@ -50,6 +58,11 @@ actual_home=$(archangel_run_as_agent sh -c 'printf %s "$HOME"')
 
 [[ "$actual_home" == "$agent_home" ]] || {
     printf 'FAIL: HOME was %s, expected %s\n' "$actual_home" "$agent_home" >&2
+    exit 1
+}
+
+[[ "$actual_bus_env" == '|' ]] || {
+    printf 'FAIL: agent inherited caller user-bus environment: %s\n' "$actual_bus_env" >&2
     exit 1
 }
 
@@ -76,4 +89,4 @@ IFS=$'\t' read -r written_key written_value < "$env_write_log"
     exit 1
 }
 
-printf 'PASS: Hermes agent wrapper isolates cwd/HOME and persists service env settings correctly\n'
+printf 'PASS: Hermes wrapper isolates cwd/HOME/user bus and persists service env settings correctly\n'
