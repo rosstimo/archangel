@@ -344,10 +344,19 @@ archangel_route_kind() {
 archangel_list_routes() {
     command -v ip >/dev/null 2>&1 || return 0
     ip -o -4 route show 2>/dev/null | awk '
-        $1 != "default" && $1 ~ /\// {
+        $1 != "default" {
+            route=$1;
+            if (route ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/)
+                route=route "/32";
+            if (route !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/)
+                next;
+
             iface="-";
-            for (i=1; i<=NF; i++) if ($i=="dev" && (i+1)<=NF) iface=$(i+1);
-            print $1 "\t" iface
+            for (i=1; i<=NF; i++)
+                if ($i=="dev" && (i+1)<=NF)
+                    iface=$(i+1);
+
+            print route "\t" iface
         }
     ' | sort -u
 }

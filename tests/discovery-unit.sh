@@ -28,6 +28,30 @@ archangel_record_service searxng http://10.0.0.2:8080 manual wg0 no no
 [[ $(archangel_route_default 8.8.8.0/24 lan) == N ]]
 [[ $(archangel_route_default 172.17.0.0/16 container/virtual) == N ]]
 
+# Linux prints IPv4 host routes without an explicit /32. Normalize them so
+# point-to-point VPN discovery can treat the route destination as a known host.
+MOCK_BIN="$TMP/mock-bin"
+mkdir -p "$MOCK_BIN"
+
+cat > "$MOCK_BIN/ip" <<'MOCKIP'
+#!/usr/bin/env bash
+if [[ "$*" == "-o -4 route show" ]]; then
+    cat <<'ROUTES'
+10.68.0.1 dev wg-agent scope link
+192.168.0.0/16 dev wlan0 proto kernel scope link src 192.168.77.77
+default via 192.168.77.1 dev wlan0
+ROUTES
+fi
+MOCKIP
+
+chmod +x "$MOCK_BIN/ip"
+
+ROUTE_PARSE_OUTPUT=$(PATH="$MOCK_BIN:$PATH" archangel_list_routes)
+
+grep -qx $'10.68.0.1/32\twg-agent' <<<"$ROUTE_PARSE_OUTPUT"
+grep -qx $'192.168.0.0/16\twlan0' <<<"$ROUTE_PARSE_OUTPUT"
+! grep -q '^default' <<<"$ROUTE_PARSE_OUTPUT"
+
 # A saved gateway must persist independently of current reachability. If a
 # service was already found through transient quick discovery, explicitly
 # assigning it to the gateway should adopt that record rather than duplicate it.
@@ -56,12 +80,12 @@ grep -qx $'10.68.0.1\tquick\twg-agent' "$VPN_PROBE_LOG"
 # Restore non-interactive defaults for the remaining test.
 yes_no() { return 1; }
 
-cat > "$ARCHANGEL_SERVICES_FILE" <<'SERVICES'
-# enabled\ttype\turl\tsource\tinterface\tmanaged
-yes\tsearxng\thttp://10.0.0.2:8080\tmanual\twg0\tno
-yes\tfirecrawl\thttp://10.0.0.3:3002\tmanual\twg0\tno
-no\thoncho\thttp://10.0.0.4:8000\tmanual\twg0\tno
-SERVICES
+{
+    printf '# enabled\ttype\turl\tsource\tinterface\tmanaged\n'
+    printf 'yes\tsearxng\thttp://10.0.0.2:8080\tmanual\twg0\tno\n'
+    printf 'yes\tfirecrawl\thttp://10.0.0.3:3002\tmanual\twg0\tno\n'
+    printf 'no\thoncho\thttp://10.0.0.4:8000\tmanual\twg0\tno\n'
+} > "$ARCHANGEL_SERVICES_FILE"
 
 ARCHANGEL_AGENT_USER=nobody
 ARCHANGEL_HERMES_BIN=/fake/hermes
