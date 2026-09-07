@@ -44,6 +44,7 @@ in_group() {
     id -nG "$user" | tr ' ' '\n' | grep -qx "$group"
 }
 
+acl_installed_by_archangel=no
 install_acl_package() {
     if command -v setfacl >/dev/null 2>&1 && command -v getfacl >/dev/null 2>&1; then
         return
@@ -64,6 +65,10 @@ install_acl_package() {
     else
         die "could not identify a supported package manager; install the acl package manually and rerun"
     fi
+
+    command -v setfacl >/dev/null 2>&1 && command -v getfacl >/dev/null 2>&1 \
+        || die "ACL package installation completed but setfacl/getfacl are still unavailable"
+    acl_installed_by_archangel=yes
 }
 
 if [[ -e "$CONFIG_FILE" || -e "$INSTALL_STATE" ]]; then
@@ -136,6 +141,7 @@ ARCHANGEL_INSTALLED_AGENT_USER='$agent_user'
 ARCHANGEL_INSTALLED_OWNER_USER='$owner_user'
 ARCHANGEL_AGENT_CREATED='$agent_created'
 ARCHANGEL_JOURNAL_WAS_MEMBER='$journal_was_member'
+ARCHANGEL_ACL_INSTALLED_BY_ARCHANGEL='$acl_installed_by_archangel'
 CFG
 chmod 0640 "$INSTALL_STATE"
 
@@ -165,6 +171,7 @@ say "Agent account: $agent_user"
 say "Owner account: $owner_user"
 say "Agent account created by Archangel: $agent_created"
 say "Journal access: $journal_enabled"
+say "ACL package installed by Archangel: $acl_installed_by_archangel"
 say
 say "Suggested next steps:"
 say "  sudo archangel-access status"
