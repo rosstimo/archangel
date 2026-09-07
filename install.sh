@@ -12,52 +12,36 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     exec sudo env ARCHANGEL_CALLER="$caller" bash "$SELF" "$@"
 fi
 
-say() {
-    printf '%s\n' "$*"
-}
-
-die() {
-    printf 'install.sh: %s\n' "$*" >&2
-    exit 1
-}
-
+say() { printf '%s\n' "$*"; }
+die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 ask() {
     local prompt=$1 default=$2 value
-    read -r -p "$prompt [$default]: " value </dev/tty
+    if [[ -n "$default" ]]; then
+        read -r -p "$prompt [$default]: " value </dev/tty
+    else
+        read -r -p "$prompt: " value </dev/tty
+    fi
     printf '%s' "${value:-$default}"
 }
-
 yes_no() {
     local prompt=$1 default=${2:-Y} answer suffix
-    if [[ "$default" == Y ]]; then suffix='Y/n'; else suffix='y/N'; fi
+    [[ "$default" == Y ]] && suffix='Y/n' || suffix='y/N'
     read -r -p "$prompt [$suffix]: " answer </dev/tty
     answer=${answer:-$default}
     [[ "$answer" =~ ^[Yy]$ ]]
 }
-
-valid_username() {
-    [[ "$1" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]
-}
-
-in_group() {
-    local user=$1 group=$2
-    id -nG "$user" | tr ' ' '\n' | grep -qx "$group"
-}
+valid_username() { [[ "$1" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; }
+in_group() { id -nG "$1" | tr ' ' '\n' | grep -qx "$2"; }
 
 acl_installed_by_archangel=no
 install_acl_package() {
-    if command -v setfacl >/dev/null 2>&1 && command -v getfacl >/dev/null 2>&1; then
-        return
-    fi
-
+    if command -v setfacl >/dev/null 2>&1 && command -v getfacl >/dev/null 2>&1; then return; fi
     say "The POSIX ACL tools are required but setfacl/getfacl were not found."
     yes_no "Install the ACL package now?" Y || die "ACL tools are required"
-
     if command -v pacman >/dev/null 2>&1; then
         pacman -S --needed acl
     elif command -v apt-get >/dev/null 2>&1; then
-        apt-get update
-        apt-get install -y acl
+        apt-get update; apt-get install -y acl
     elif command -v dnf >/dev/null 2>&1; then
         dnf install -y acl
     elif command -v zypper >/dev/null 2>&1; then
@@ -65,11 +49,17 @@ install_acl_package() {
     else
         die "could not identify a supported package manager; install the acl package manually and rerun"
     fi
-
     command -v setfacl >/dev/null 2>&1 && command -v getfacl >/dev/null 2>&1 \
         || die "ACL package installation completed but setfacl/getfacl are still unavailable"
     acl_installed_by_archangel=yes
 }
+
+[[ -r "$SCRIPT_DIR/lib/archangel/discovery.sh" ]] || die "missing lib/archangel/discovery.sh"
+[[ -r "$SCRIPT_DIR/lib/archangel/hermes.sh" ]] || die "missing lib/archangel/hermes.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/archangel/discovery.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/archangel/hermes.sh"
 
 if [[ -e "$CONFIG_FILE" || -e "$INSTALL_STATE" ]]; then
     die "Archangel already appears to be installed. Run ./uninstall.sh before changing the configured agent account."
@@ -79,27 +69,23 @@ if [[ -d "$STATE_DIR" ]] && find "$STATE_DIR" -mindepth 1 -print -quit 2>/dev/nu
 fi
 
 say "Archangel bootstrap"
-say "This prepares a separate Linux account and installs the local access-management tools."
+say "This creates an isolated Linux account, installs Hermes if requested, discovers"
+say "services the agent may use, and installs local access-management tools."
 say
 
 caller=${ARCHANGEL_CALLER:-}
-if [[ -z "$caller" || "$caller" == root ]] || ! getent passwd "$caller" >/dev/null; then
-    caller=$(logname 2>/dev/null || true)
-fi
-if [[ -z "$caller" || "$caller" == root ]] || ! getent passwd "$caller" >/dev/null; then
-    caller=$(awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}' /etc/passwd)
-fi
+if [[ -z "$caller" || "$caller" == root ]] || ! getent passwd "$caller" >/dev/null; then caller=$(logname 2>/dev/null || true); fi
+if [[ -z "$caller" || "$caller" == root ]] || ! getent passwd "$caller" >/dev/null; then caller=$(awk -F: '$3 >= 1000 && $3 < 60000 {print $1; exit}' /etc/passwd); fi
 [[ -n "$caller" ]] || die "could not determine the human/owner account"
 
+say "[1/6] Agent account"
 owner_user=$(ask "Human account whose files may be shared with the agent" "$caller")
 getent passwd "$owner_user" >/dev/null || die "user '$owner_user' does not exist"
 [[ "$owner_user" != root ]] || die "root cannot be used as the human owner account"
-
 agent_user=$(ask "Unix account to run the agent" "hermes")
 valid_username "$agent_user" || die "'$agent_user' is not a valid simple Unix username"
 [[ "$agent_user" != root ]] || die "root cannot be used as the Archangel agent account"
 [[ "$agent_user" != "$owner_user" ]] || die "agent and owner accounts must be different"
-
 agent_comment=$(ask "Account description" "Archangel agent")
 
 install_acl_package
@@ -119,12 +105,10 @@ journal_was_member=no
 journal_enabled=no
 if getent group systemd-journal >/dev/null 2>&1; then
     if in_group "$agent_user" systemd-journal; then
-        journal_was_member=yes
-        journal_enabled=yes
+        journal_was_member=yes; journal_enabled=yes
         say "'$agent_user' already has systemd journal access; preserving that pre-existing membership."
     elif yes_no "Allow '$agent_user' to read the systemd journal for diagnostics?" Y; then
-        usermod -aG systemd-journal "$agent_user"
-        journal_enabled=yes
+        usermod -aG systemd-journal "$agent_user"; journal_enabled=yes
     fi
 else
     say "No systemd-journal group found; skipping journal group setup."
@@ -134,16 +118,10 @@ install -d -m 0750 "$STATE_DIR" "$STATE_DIR/grants" "$STATE_DIR/traversal"
 : > "$STATE_DIR/grants.tsv"
 : > "$STATE_DIR/traversal.tsv"
 chmod 0640 "$STATE_DIR/grants.tsv" "$STATE_DIR/traversal.tsv"
-
-cat > "$INSTALL_STATE" <<CFG
-# Generated by Archangel install.sh
-ARCHANGEL_INSTALLED_AGENT_USER='$agent_user'
-ARCHANGEL_INSTALLED_OWNER_USER='$owner_user'
-ARCHANGEL_AGENT_CREATED='$agent_created'
-ARCHANGEL_JOURNAL_WAS_MEMBER='$journal_was_member'
-ARCHANGEL_ACL_INSTALLED_BY_ARCHANGEL='$acl_installed_by_archangel'
-CFG
-chmod 0640 "$INSTALL_STATE"
+ARCHANGEL_AGENT_USER="$agent_user"
+ARCHANGEL_OWNER_USER="$owner_user"
+ARCHANGEL_SERVICES_FILE="$STATE_DIR/services.tsv"
+archangel_services_init
 
 cat > "$CONFIG_FILE" <<CFG
 # Generated by Archangel install.sh
@@ -152,16 +130,60 @@ ARCHANGEL_OWNER_USER='$owner_user'
 CFG
 chmod 0644 "$CONFIG_FILE"
 
+say
+say "[2/6] Archangel tools"
 install -d -m 0755 /usr/local/lib/archangel
 install -m 0644 "$SCRIPT_DIR/lib/archangel/"*.sh /usr/local/lib/archangel/
 install -m 0755 "$SCRIPT_DIR/bin/archangel-access" /usr/local/bin/archangel-access
 install -m 0755 "$SCRIPT_DIR/bin/archangel-diagnostic" /usr/local/bin/archangel-diagnostic
+install -m 0755 "$SCRIPT_DIR/bin/archangel-services" /usr/local/bin/archangel-services
 install -m 0755 "$SCRIPT_DIR/uninstall.sh" /usr/local/bin/archangel-uninstall
+
+say
+say "[3/6] Hermes Agent"
+ARCHANGEL_HERMES_INSTALLED=no
+ARCHANGEL_HERMES_BIN=
+ARCHANGEL_HERMES_HOME="$(archangel_agent_home)/.hermes"
+archangel_install_hermes || say "Hermes installation reported an error; Archangel setup can continue."
+
+cat > "$INSTALL_STATE" <<CFG
+# Generated by Archangel install.sh
+ARCHANGEL_INSTALLED_AGENT_USER='$agent_user'
+ARCHANGEL_INSTALLED_OWNER_USER='$owner_user'
+ARCHANGEL_AGENT_CREATED='$agent_created'
+ARCHANGEL_JOURNAL_WAS_MEMBER='$journal_was_member'
+ARCHANGEL_ACL_INSTALLED_BY_ARCHANGEL='$acl_installed_by_archangel'
+ARCHANGEL_HERMES_INSTALLED='${ARCHANGEL_HERMES_INSTALLED:-unknown}'
+ARCHANGEL_HERMES_BIN='${ARCHANGEL_HERMES_BIN:-}'
+ARCHANGEL_HERMES_HOME='${ARCHANGEL_HERMES_HOME:-}'
+CFG
+chmod 0640 "$INSTALL_STATE"
+
+say
+say "[4/6] Service discovery"
+if yes_no "Run the Archangel service-discovery wizard now?" Y; then
+    archangel_discovery_wizard
+else
+    say "Discovery skipped. Run 'sudo archangel-services discover' whenever you want."
+fi
+
+say
+say "[5/6] Hermes service integration"
+if [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]]; then
+    archangel_apply_service_config
+else
+    say "Hermes is not currently installed. Service selections remain saved for later."
+fi
+
+say
+say "[6/6] Hermes setup and diagnostics"
+archangel_finish_hermes_setup
 
 say
 say "Installed:"
 say "  /usr/local/bin/archangel-access"
 say "  /usr/local/bin/archangel-diagnostic"
+say "  /usr/local/bin/archangel-services"
 say "  /usr/local/bin/archangel-uninstall"
 say "  /usr/local/lib/archangel"
 say "  $CONFIG_FILE"
@@ -171,11 +193,13 @@ say "Agent account: $agent_user"
 say "Owner account: $owner_user"
 say "Agent account created by Archangel: $agent_created"
 say "Journal access: $journal_enabled"
-say "ACL package installed by Archangel: $acl_installed_by_archangel"
+say "Hermes installed by Archangel: ${ARCHANGEL_HERMES_INSTALLED:-unknown}"
+[[ -n "${ARCHANGEL_HERMES_BIN:-}" ]] && say "Hermes executable: $ARCHANGEL_HERMES_BIN"
 say
-say "Suggested next steps:"
+say "Useful next commands:"
 say "  sudo archangel-access status"
-say "  sudo archangel-access check /home/$owner_user/.ssh"
+say "  sudo archangel-services status"
+say "  sudo archangel-services discover"
 say "  sudo -u $agent_user -H archangel-diagnostic"
 say
 say "To share a config tree later:"
