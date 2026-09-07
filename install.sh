@@ -45,8 +45,13 @@ check_agent_sudo_privileges() {
     say
     say "Archangel did not create these privileges and will not remove them."
     say "They weaken the intended non-privileged agent boundary."
-    yes_no "Continue using '$user' despite these pre-existing sudo privileges?" N || \
-        die "choose an agent account without inherited sudo authority or adjust the host sudoers policy"
+    if ! yes_no "Continue using '$user' despite these pre-existing sudo privileges?" N; then
+        if [[ "${agent_created:-no}" == yes ]]; then
+            say "Removing the newly created agent account before aborting."
+            userdel -r "$user" >/dev/null 2>&1 || true
+        fi
+        die "adjust the host sudoers policy or explicitly accept the pre-existing agent privilege"
+    fi
 }
 
 acl_installed_by_archangel=no
