@@ -43,6 +43,24 @@ source "$LIB_DIR/hermes.sh"
 ARCHANGEL_HERMES_BIN=$(archangel_hermes_bin || true)
 ARCHANGEL_HERMES_HOME="$(archangel_agent_home)/.hermes"
 
+archangel_services_usage() {
+    cat <<USAGE
+Usage:
+  archangel-services status
+  archangel-services discover
+  archangel-services add URL [TYPE]
+  archangel-services apply
+
+  archangel-services gateway status
+  archangel-services gateway add NAME ADDRESS [INTERFACE] [TRANSPORT]
+  archangel-services gateway service GATEWAY NAME PORT [TYPE] [SCHEME]
+  archangel-services gateway probe [NAME]
+
+Gateways are saved endpoint groups, not VPN definitions. Archangel never brings
+up or modifies the hinted network interface or transport.
+USAGE
+}
+
 case "${1:-wizard}" in
     status)
         archangel_services_status
@@ -65,14 +83,41 @@ case "${1:-wizard}" in
     apply)
         archangel_apply_service_config
         ;;
+    gateway)
+        subcommand=${2:-status}
+        case "$subcommand" in
+            status)
+                archangel_gateways_status
+                ;;
+            add)
+                [[ $# -ge 4 ]] || die "usage: archangel-services gateway add NAME ADDRESS [INTERFACE] [TRANSPORT]"
+                name=$3
+                address=$4
+                iface=${5:--}
+                transport=${6:-auto}
+                archangel_record_gateway "$name" "$address" "$iface" "$transport"
+                say "Saved gateway '$name' at $address (interface=$iface, transport=$transport)."
+                ;;
+            service)
+                [[ $# -ge 6 ]] || die "usage: archangel-services gateway service GATEWAY NAME PORT [TYPE] [SCHEME]"
+                gateway=$3
+                service_name=$4
+                port=$5
+                type=${6:-}
+                scheme=${7:-http}
+                archangel_gateway_add_service "$gateway" "$service_name" "$port" "$type" "$scheme"
+                ;;
+            probe)
+                archangel_probe_gateway "${3:-}"
+                ;;
+            *)
+                archangel_services_usage
+                exit 2
+                ;;
+        esac
+        ;;
     *)
-        cat <<USAGE
-Usage:
-  archangel-services status
-  archangel-services discover
-  archangel-services add URL [TYPE]
-  archangel-services apply
-USAGE
+        archangel_services_usage
         exit 2
         ;;
 esac
