@@ -20,15 +20,66 @@ An existing Archangel installation must be uninstalled before changing the
 configured agent account. This prevents ACL state belonging to an old agent
 identity from being stranded.
 
+The installer can install Hermes Agent under the dedicated agent account, or
+reuse a Hermes installation that is already present there. It then offers
+optional service discovery. Local-machine discovery is suggested by default;
+LAN/VPN probing, full network scans, and direct URL entry remain explicit user
+choices and can all be skipped.
+
 After installation:
 
 ```bash
 sudo archangel-access status
+sudo archangel-services status
 sudo -u hermes -H archangel-diagnostic
 ```
 
-If you chose a different agent username, use that username in the second
-command.
+If you chose a different agent username, use that username in the third command.
+
+## Hermes and service discovery
+
+Archangel treats Hermes as the agent runtime while keeping host integration,
+service discovery, and Linux permissions under Archangel's control. It uses
+Hermes' own setup/configuration interfaces where practical rather than creating
+an entire Hermes configuration file itself.
+
+During installation you may:
+
+- install Hermes or keep an existing installation;
+- discover supported services on the local machine;
+- inspect reachable LAN and VPN routes and choose exactly which networks may be
+  probed;
+- choose quick discovery from known neighbors or explicitly request a full
+  `nmap` scan for an approved CIDR;
+- enter service URLs directly instead of scanning;
+- enable or disable each discovered service for Hermes;
+- run the Hermes setup wizard for provider authentication and other Hermes-owned
+  settings;
+- verify selected endpoints from the agent account and run `hermes doctor`.
+
+The initial known-service set includes Ollama, SearXNG, Firecrawl, Honcho,
+ComfyUI, and OpenAI-compatible endpoints. See
+[`service-discovery.md`](service-discovery.md) for the current probes,
+configuration boundary, and network-discovery behavior.
+
+Discovery and configuration can be revisited after installation:
+
+```bash
+sudo archangel-services status
+sudo archangel-services discover
+sudo archangel-services add http://host:port [TYPE]
+sudo archangel-services apply
+```
+
+`discover` reruns the interactive local/LAN/VPN/manual discovery wizard and asks
+which recorded endpoints Hermes should use. `add` records a direct endpoint and
+attempts to identify its type when `TYPE` is omitted. `apply` applies the
+supported Hermes settings for enabled services.
+
+Service records are stored in `/var/lib/archangel/services.tsv`, including how
+the endpoint was found and whether Archangel manages it. A service merely found
+on localhost, a LAN, or a VPN is not considered Archangel-owned and will not be
+removed by uninstall.
 
 ## Filesystem access
 
@@ -140,6 +191,13 @@ If an Archangel-created agent owns files inside previously managed trees, the
 uninstaller offers to reassign those files to the configured human owner before
 deleting the account so it does not silently leave orphaned numeric ownership.
 
+Hermes provenance is tracked separately. If Hermes existed before Archangel, it
+is left untouched. If Archangel installed Hermes and the agent account is being
+kept, uninstall offers to run Hermes' upstream runtime uninstaller. Archangel
+does not assume permission to perform Hermes' full data/configuration removal.
+If the entire Archangel-created agent account is removed, its home directory and
+Hermes installation disappear with that account.
+
 At the end, the uninstaller prints a **What may remain** report with the items
 that Archangel intentionally does not remove and manual cleanup guidance.
 Depending on how the machine was configured, those can include:
@@ -148,6 +206,9 @@ Depending on how the machine was configured, those can include:
   preserved, and an Archangel-created account remains if the user chooses to
   keep it. If it is no longer needed, remove it manually with `userdel -r`
   after reviewing its files.
+- **Hermes user data/configuration.** When Archangel installed Hermes but the
+  account is retained, the upstream runtime uninstaller may intentionally leave
+  Hermes configuration and user data in the agent home.
 - **The distro `acl` package.** The installer records whether Archangel had
   to install this package. Uninstall leaves it installed because another
   program may depend on it. If Archangel installed it and the user wants it
@@ -159,10 +220,8 @@ Depending on how the machine was configured, those can include:
   scan the entire machine during uninstall. The report preserves the numeric
   UID and prints a `find` command that can be used to locate remaining files
   before changing ownership or deleting them.
-- **Software or data installed separately from Archangel.** An AI runtime such
-  as Hermes, downloaded models, containers, systemd services, caches,
-  repositories, and similar data are untouched unless Archangel itself created
-  and tracked them.
+- **Discovered or separately installed services and data.** LAN/VPN services,
+  containers, models, and software that Archangel did not install are untouched.
 
 For example, after an uninstall the ownership audit shown by the script is
 similar to:
@@ -182,4 +241,3 @@ a shared package, user account, runtime, or unrelated file is safe to remove.
 See [`first-task.md`](first-task.md) for a cautious first diagnostic
 and an example prompt that asks the agent to inspect the machine without making
 changes.
-
