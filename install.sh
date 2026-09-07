@@ -33,6 +33,22 @@ yes_no() {
 valid_username() { [[ "$1" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; }
 in_group() { id -nG "$1" | tr ' ' '\n' | grep -qx "$2"; }
 
+check_agent_sudo_privileges() {
+    local user=$1 listing
+    command -v sudo >/dev/null 2>&1 || return 0
+    listing=$(sudo -l -U "$user" 2>/dev/null || true)
+    grep -Eq '^[[:space:]]*\([^)]*\)[[:space:]]+' <<<"$listing" || return 0
+
+    say
+    say "WARNING: '$user' already has sudo authority from this machine's existing sudoers policy:"
+    printf '%s\n' "$listing" | sed -n '/may run the following commands/,$p'
+    say
+    say "Archangel did not create these privileges and will not remove them."
+    say "They weaken the intended non-privileged agent boundary."
+    yes_no "Continue using '$user' despite these pre-existing sudo privileges?" N || \
+        die "choose an agent account without inherited sudo authority or adjust the host sudoers policy"
+}
+
 acl_installed_by_archangel=no
 install_acl_package() {
     if command -v setfacl >/dev/null 2>&1 && command -v getfacl >/dev/null 2>&1; then return; fi
@@ -100,6 +116,8 @@ else
     useradd -m -s /bin/bash -c "$agent_comment" "$agent_user"
     agent_created=yes
 fi
+
+check_agent_sudo_privileges "$agent_user"
 
 journal_was_member=no
 journal_enabled=no
