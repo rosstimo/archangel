@@ -140,6 +140,12 @@ Development checks completed for the service-discovery work:
   from remote agent peers, with return traffic statefully limited.
 - [x] End-to-end HTTP/API reachability from `fw` to all current HQ gateway services:
   Ollama 11431/11432/11433, SearXNG 8089, ComfyUI 8188, Firecrawl 3002, and Honcho 8000.
+- [x] Real saved-gateway status/probe with `wg-agent` active: `hq` reported
+  `up:wg-agent`, retained seven enabled service definitions, and all seven service
+  probes succeeded.
+- [x] Real saved-gateway unavailable-path behavior: after intentionally removing
+  `wg-agent`, `hq` reported `interface-down`, retained all seven definitions, and
+  skipped service probes instead of deleting state or starting the VPN.
 
 ### Live test observations, 2026-09-07
 
@@ -173,6 +179,12 @@ The real-machine tests exposed several useful distinctions:
 - This topology confirms why neighbor-only WireGuard discovery was inadequate. The
   branch now directly probes routed `/32` VPN targets and adds a saved gateway model
   for conditional paths that should remain known while the interface is down.
+- The saved-gateway live test confirmed both sides of the availability boundary tested
+  so far: with `wg-agent` active the seven HQ services probed successfully; after the
+  interface was removed the same saved gateway remained present as `interface-down`
+  and no probes were sent. The temporary test state was deleted after bringing the
+  VPN back up, so recovery of that exact saved state after reactivation remains to be
+  exercised separately.
 - The first Hermes setup attempt reproduced a user-service failure under a plain
   `sudo -u` invocation. The fresh installer-driven run then successfully enabled
   tracked linger and brought up the agent's user systemd manager before Hermes setup.
@@ -205,9 +217,10 @@ Still to verify on a disposable or test Linux setup:
   matching sudoers rule.
 - [ ] Conservative browser/computer-use and full-Hermes-setup defaults on a fresh run.
 - [ ] Quick LAN discovery from a cold neighbor table without prior contact with the target host.
-- [ ] New routed-`/32` quick VPN discovery behavior on the real `wg-agent` interface.
-- [ ] Saved gateway `status`/`probe` behavior on the real HQ route while WireGuard is
-  active and again after the interface is intentionally brought down.
+- [ ] New routed-`/32` quick VPN discovery behavior through the normal discovery wizard
+  on the real `wg-agent` interface.
+- [ ] Saved gateway recovery using the same persistent gateway/service records across
+  an intentional `wg-agent` down/up cycle.
 - [ ] Uninstall behavior when the agent account, Hermes runtime, or linger state existed
   before Archangel and therefore must be preserved.
 
