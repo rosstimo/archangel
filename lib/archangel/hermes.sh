@@ -155,8 +155,8 @@ archangel_install_hermes() {
         return 0
     }
 
-    if ! yes_no "Include Hermes browser automation components?" Y; then
-        flags+=(--skip-browser)
+    if ! yes_no "Include Hermes browser automation and computer-use components?" N; then
+        flags+=(--skip-browser --skip-computer-use)
     fi
 
     say "Installing Hermes as '$ARCHANGEL_AGENT_USER' using the upstream installer..."
@@ -355,7 +355,7 @@ archangel_finish_hermes_setup() {
     say "Hermes setup"
     say "------------"
     say "Archangel has applied service settings it can configure safely."
-    if yes_no "Run the Hermes setup wizard now for providers, tools, and messaging?" Y; then
+    if yes_no "Run the Hermes setup wizard now for providers, tools, and messaging?" N; then
         archangel_run_as_agent "$ARCHANGEL_HERMES_BIN" setup
     fi
     archangel_verify_selected_services
