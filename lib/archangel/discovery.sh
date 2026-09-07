@@ -105,7 +105,7 @@ archangel_identify_url() {
 }
 
 archangel_record_service() {
-    local type url source iface managed enabled
+    local type url source iface managed enabled tmp
     type=$1
     url=$2
     source=${3:-manual}
@@ -116,6 +116,19 @@ archangel_record_service() {
     archangel_services_init
 
     if awk -F '\t' -v t="$type" -v u="$url" '$1 !~ /^#/ && $2 == t && $3 == u {found=1} END {exit !found}' "$ARCHANGEL_SERVICES_FILE"; then
+        # A saved gateway is more durable provenance than transient quick/full
+        # discovery. If the endpoint already exists, let the explicit gateway
+        # definition adopt it rather than creating a duplicate.
+        if [[ "$source" == gateway:* ]]; then
+            tmp=$(mktemp)
+            awk -F '\t' -v OFS='\t' \
+                -v e="$enabled" -v t="$type" -v u="$url" -v s="$source" -v i="$iface" -v m="$managed" '
+                $1 !~ /^#/ && $2 == t && $3 == u {print e,t,u,s,i,m; next}
+                {print}
+            ' "$ARCHANGEL_SERVICES_FILE" > "$tmp"
+            install -m 0640 "$tmp" "$ARCHANGEL_SERVICES_FILE"
+            rm -f "$tmp"
+        fi
         return 0
     fi
 
