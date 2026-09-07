@@ -31,6 +31,16 @@ sudo archangel-access audit write "$HOME"
 `audit` runs `find` as the configured agent user. It reports effective access,
 not just ACL entries managed by Archangel.
 
+If you add files to a granted tree later as your normal user, synchronize the
+grant before expecting the agent to see them:
+
+```bash
+sudo archangel-access sync "$HOME/.config/hypr"
+```
+
+Archangel does not use default ACL inheritance. Every object it changes is
+snapshotted first so revoke and uninstall can restore the original ACL exactly.
+
 ## 2. Run the read-only diagnostic as the agent
 
 Find the configured agent account:
@@ -65,5 +75,13 @@ crossing the permissions boundary.
 sudo archangel-access revoke "$HOME/.config/nvim"
 ```
 
-Archangel removes the ACLs it manages for that path and cleans up parent
-traversal ACLs that are no longer needed by another managed grant.
+Archangel restores the ACL snapshot captured before it touched the path. Shared
+parent traversal ACLs are reference-counted and restored when the last grant
+that needs them is removed.
+
+A failed restore is reported as an error and its recovery state is retained.
+You can retry the revoke or restore all managed changes with:
+
+```bash
+sudo archangel-access reset
+```
