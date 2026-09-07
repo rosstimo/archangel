@@ -70,10 +70,11 @@ probing, and asks about each routed subnet before sending network probes. Full C
 scans require another explicit choice.
 
 Point-to-point VPNs need a different quick-discovery rule than Ethernet/Wi-Fi. A
-WireGuard route such as `10.68.0.1/32 dev wg-agent` names exactly one remote host,
-so Archangel can probe that host directly even though the interface has no ARP
-neighbor table. Broader routes still require saved gateway metadata, explicit URL
-entry, or a deliberately approved scan.
+WireGuard host route naming exactly one remote address can be probed directly even
+though the interface has no ARP neighbor table. Linux may print that route as
+`10.68.0.1 dev wg-agent` rather than `10.68.0.1/32 dev wg-agent`, so Archangel
+normalizes bare IPv4 host routes to `/32` before discovery. Broader routes still
+require saved gateway metadata, explicit URL entry, or a deliberately approved scan.
 
 Saved gateways are metadata, not transport ownership. Archangel can remember that
 `hq` is reached at `10.68.0.1` through `wg-agent`, but it does not create WireGuard
@@ -146,6 +147,12 @@ Development checks completed for the service-discovery work:
 - [x] Real saved-gateway unavailable-path behavior: after intentionally removing
   `wg-agent`, `hq` reported `interface-down`, retained all seven definitions, and
   skipped service probes instead of deleting state or starting the VPN.
+- [x] Real routed-host quick VPN discovery through the normal network-discovery path:
+  Linux reported `10.68.0.1 dev wg-agent`, Archangel normalized it to
+  `10.68.0.1/32`, classified it as VPN, and discovered all seven HQ services without
+  requiring a neighbor-table entry.
+- [x] Discovery and Hermes unit suites passed after adding host-route normalization
+  coverage and correcting the tab-delimited service fixture.
 
 ### Live test observations, 2026-09-07
 
@@ -176,9 +183,11 @@ The real-machine tests exposed several useful distinctions:
   persistent rules were corrected while adding the Framework peer.
 - On `fw`, `wg-agent` routes only `10.68.0.1/32`; ordinary LAN and Internet traffic
   remain outside this tunnel. All seven gateway services responded successfully.
-- This topology confirms why neighbor-only WireGuard discovery was inadequate. The
-  branch now directly probes routed `/32` VPN targets and adds a saved gateway model
-  for conditional paths that should remain known while the interface is down.
+- The first real quick-discovery attempt exposed a route-parser bug rather than a VPN
+  problem. `ip route` displayed the WireGuard destination as `10.68.0.1 dev wg-agent`,
+  and the parser discarded destinations without `/`. Normalizing bare IPv4 route
+  destinations to `/32` fixed the issue. A repeat quick-discovery run then found all
+  seven HQ services directly over `wg-agent` with no ARP/neighbor entry.
 - The saved-gateway live test confirmed both sides of the availability boundary tested
   so far: with `wg-agent` active the seven HQ services probed successfully; after the
   interface was removed the same saved gateway remained present as `interface-down`
@@ -217,8 +226,6 @@ Still to verify on a disposable or test Linux setup:
   matching sudoers rule.
 - [ ] Conservative browser/computer-use and full-Hermes-setup defaults on a fresh run.
 - [ ] Quick LAN discovery from a cold neighbor table without prior contact with the target host.
-- [ ] New routed-`/32` quick VPN discovery behavior through the normal discovery wizard
-  on the real `wg-agent` interface.
 - [ ] Saved gateway recovery using the same persistent gateway/service records across
   an intentional `wg-agent` down/up cycle.
 - [ ] Uninstall behavior when the agent account, Hermes runtime, or linger state existed
@@ -260,6 +267,8 @@ report them precisely.
   and gateway adoption of transiently discovered service records.
 - `9faf8eb`: exposed gateway management through `archangel-services`.
 - `48a0f3c`: added saved-gateway and point-to-point VPN discovery regression coverage.
+- `ca65323`: normalized bare IPv4 host routes to `/32` for discovery and fixed the
+  tab-delimited discovery test fixture exposed by real WireGuard validation.
 
 Keep implementation updates, validation results, and open issues here as work
 continues. Update the README when the project's purpose or documentation entry
