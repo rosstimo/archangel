@@ -12,12 +12,16 @@ yet been merged to `main`.
 Implemented on the feature branch:
 
 - Interactive host bootstrap with a configurable, dedicated non-root agent account.
+- Installation-time detection of pre-existing sudo authority inherited from host
+  sudoers policy, with an explicit acknowledgement required before proceeding.
 - Optional systemd journal access, with the original membership recorded for uninstall.
 - `archangel-access` commands for granting, revoking, synchronizing, checking,
   and auditing filesystem access, plus reset and recovery.
 - ACL snapshots and shared parent-traversal tracking for restoring managed permissions.
 - Optional Hermes Agent installation under the dedicated agent account, using the
   upstream Hermes installer and setup/doctor commands.
+- Conservative Hermes defaults: browser/computer-use components and the full Hermes
+  setup wizard are opt-in rather than part of the default Archangel baseline.
 - Hermes installation provenance so a pre-existing runtime is not removed as an
   Archangel-owned installation.
 - Optional service discovery with independent choices for local-machine discovery,
@@ -93,27 +97,35 @@ Development checks completed for the service-discovery work:
 - [x] Review of the committed branch integration between `install.sh`,
   `archangel-services`, discovery helpers, Hermes helpers, and `uninstall.sh`.
 - [x] Real-machine clean uninstall and feature-branch installation on Arch Linux.
-- [x] Real Hermes 0.21.0 installation under an isolated agent account after fixing
-  inherited-working-directory leakage. `hermes doctor` executes successfully.
+- [x] Full installer-driven Hermes 0.21.0 fresh install under a newly created isolated
+  agent account, without manual recovery or repair.
+- [x] Installation provenance recorded Hermes, account creation, journal membership,
+  and systemd linger accurately in `/var/lib/archangel/install.env`.
 - [x] Regression test proving agent commands start in the agent home with matching
   `HOME` rather than inheriting the human user's source checkout.
 - [x] Real quick-LAN discovery of SearXNG and ComfyUI on `192.168.77.249` as the
   isolated agent account.
 - [x] Real agent-account HTTP reachability of the discovered SearXNG endpoint.
-- [x] Reproduced Hermes gateway user-service failure when the agent lacked a user
-  D-Bus/systemd session; branch now prepares the user manager and optionally enables
-  tracked systemd linger before setup.
-- [x] Reproduced SearXNG configuration mismatch when `SEARXNG_URL` was written as an
-  arbitrary YAML key; branch now persists it through Hermes' `.env` writer.
+- [x] Real SearXNG handoff through Hermes' `.env` writer; Hermes doctor reports
+  `web search (searxng)` available.
+- [x] User-systemd manager and tracked linger preparation succeeded for the fresh
+  agent account.
+- [x] Docker CLI presence does not grant Docker authority; the isolated agent was
+  denied access to `/var/run/docker.sock`.
+- [x] Clean uninstall of an installer-created account removed the account, its home
+  and Hermes installation, Archangel config/state, journal membership, and the
+  systemd linger state that Archangel enabled.
 
 ### Live test observations, 2026-09-07
 
-The first real-machine test exposed several useful distinctions:
+The real-machine tests exposed several useful distinctions:
 
 - Hermes installation originally failed because the root installer invoked Hermes as
   the agent user while retaining the human user's working directory. `uv` encountered
   the human checkout's inaccessible `.venv`. Resetting the agent working directory to
   its own home fixed the install without weakening filesystem isolation.
+- A subsequent completely fresh run installed Hermes 0.21.0 through Archangel itself,
+  proving the working-directory fix and installation provenance path end to end.
 - Quick LAN discovery uses the kernel neighbor table. SearXNG at
   `http://192.168.77.249:8089` was discoverable once the `hq` host was present in that
   table. This confirms service probing works while also identifying cold-start host
@@ -128,9 +140,25 @@ The first real-machine test exposed several useful distinctions:
   Ollama, SearXNG, ComfyUI, Firecrawl, and Honcho. This motivates a future saved
   service-gateway abstraction rather than trying to infer those endpoints from an
   inactive VPN route.
-- Hermes setup migrated config to v41 successfully, but gateway service installation
-  failed under a plain `sudo -u` invocation because the service account had no user
-  systemd D-Bus. The current branch now prepares that manager and can enable linger.
+- The first setup attempt reproduced a user-service failure under a plain `sudo -u`
+  invocation. The fresh installer-driven run then successfully enabled tracked linger
+  and brought up the agent's user systemd manager before Hermes setup.
+- SearXNG initially exposed a configuration-boundary bug when its URL was written as
+  an arbitrary YAML key. The fresh run persisted the URL in `.env`, selected the
+  SearXNG backend in `config.yaml`, and verified HTTP reachability as the agent.
+- The fresh agent inherited `NOPASSWD: /usr/bin/asdcontrol` because the host contains
+  the machine-wide sudoers rule `ALL ALL=(ALL) NOPASSWD: /usr/bin/asdcontrol`.
+  Archangel did not create that authority, but it weakens the non-privileged boundary;
+  the installer now detects pre-existing sudo command authority and requires explicit
+  acknowledgement rather than silently proceeding.
+- Browser automation defaulted on during the validated run, causing the upstream
+  installer to attempt root-only Playwright package setup and fall back to downloaded
+  browser binaries. Archangel now defaults browser/computer-use components off and
+  also defaults the full Hermes setup wizard off, keeping the baseline installation
+  deliberately narrow.
+- A clean uninstall of the installer-created state disabled Archangel-enabled linger,
+  terminated remaining agent processes when approved, removed the agent account/home,
+  and removed `/etc/archangel.conf` and `/var/lib/archangel`.
 
 Still to verify on a disposable or test Linux setup:
 
@@ -138,21 +166,17 @@ Still to verify on a disposable or test Linux setup:
 - [ ] Preservation of existing ACL entries, masks, and unrelated effective access.
 - [ ] Overlap rejection and restoration of shared parent-traversal permissions.
 - [ ] Recovery after interrupted operations or failed ACL restoration.
-- [ ] Fresh install, reuse of an existing account, root rejection, and account-change protection.
-- [ ] Full installer-driven Hermes fresh install after the working-directory fix, including
-  provenance recording rather than the manual recovery used in the first test.
+- [ ] Reuse of an existing account, root rejection, and account-change protection.
 - [ ] Hermes reuse of a pre-existing runtime and deliberate Hermes-install skip.
-- [ ] Re-run service apply after the `.env` persistence fix and verify Hermes reports
-  SearXNG as configured and usable.
-- [ ] Hermes gateway service installation after user-systemd/linger preparation.
+- [ ] Installation-time inherited-sudo warning/acknowledgement on a host with a
+  matching sudoers rule.
+- [ ] Conservative browser/computer-use and full-Hermes-setup defaults on a fresh run.
 - [ ] Quick LAN discovery from a cold neighbor table without prior contact with the target host.
 - [ ] VPN discovery where no neighbor table exists, including direct URL entry and
   an explicitly approved full scan.
 - [ ] Saved service-gateway behavior for endpoints reachable only through a conditional VPN path.
-- [ ] Hermes setup/configuration behavior with real provider credentials and a
-  self-hosted Honcho instance.
-- [ ] Uninstall behavior for journal membership, retained accounts, agent-owned files,
-  Hermes provenance, systemd-linger provenance, package provenance, and reported residual state.
+- [ ] Uninstall behavior when the agent account, Hermes runtime, or linger state existed
+  before Archangel and therefore must be preserved.
 
 One non-destructive wording/provenance refinement remains: the current install state
 records whether Hermes was installed by Archangel, but `no` can mean either that
@@ -183,6 +207,9 @@ report them precisely.
 - `945e2ab`: prepared the agent user manager and tracked optional linger during install.
 - `d31cabb`: added linger-aware uninstall behavior.
 - `17c3727`: expanded Hermes helper regression coverage for `.env` persistence.
+- `9c6830c`: added installation-time detection of pre-existing agent sudo authority.
+- `ceff89f`: made browser/computer-use components and the full Hermes setup wizard
+  opt-in defaults.
 
 Keep implementation updates, validation results, and open issues here as work
 continues. Update the README when the project's purpose or documentation entry
