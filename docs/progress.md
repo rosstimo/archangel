@@ -34,15 +34,22 @@ Implemented on the feature branch:
   and integration to be changed after initial installation.
 - Supported Hermes handoff for SearXNG search, Firecrawl extraction, Honcho memory
   setup, and optional Ollama custom-model configuration.
+- Hermes environment-style service values are persisted through Hermes' own `.env`
+  writer while backend selections remain in `config.yaml`.
 - ComfyUI endpoint discovery without forcing one Hermes integration mechanism.
 - Selected-service reachability checks executed as the agent account, followed by
   Hermes diagnostics.
+- Agent-command isolation resets both `HOME` and the working directory before
+  invoking Hermes or other commands as the agent account.
+- User-systemd preparation for Hermes gateway services, including optional systemd
+  linger and provenance for uninstall.
 - `archangel-diagnostic` and a first-task guide for a read-only system check.
 - Uninstall with ACL restoration, account cleanup choices, package provenance,
-  Hermes-runtime provenance, and a report of residual state and manual cleanup steps.
+  Hermes-runtime provenance, systemd-linger provenance, and a report of residual
+  state and manual cleanup steps.
 
-Persistent agent operation, scheduled checks, notification policy, and richer
-service definitions remain future work.
+Scheduled checks, notification policy, service-gateway definitions, and richer
+persistent-agent lifecycle management remain future work.
 
 ## Service-discovery design choices
 
@@ -85,9 +92,45 @@ Development checks completed for the service-discovery work:
 - [x] Mock Hermes configuration calls for selected SearXNG and Firecrawl endpoints.
 - [x] Review of the committed branch integration between `install.sh`,
   `archangel-services`, discovery helpers, Hermes helpers, and `uninstall.sh`.
+- [x] Real-machine clean uninstall and feature-branch installation on Arch Linux.
+- [x] Real Hermes 0.21.0 installation under an isolated agent account after fixing
+  inherited-working-directory leakage. `hermes doctor` executes successfully.
+- [x] Regression test proving agent commands start in the agent home with matching
+  `HOME` rather than inheriting the human user's source checkout.
+- [x] Real quick-LAN discovery of SearXNG and ComfyUI on `192.168.77.249` as the
+  isolated agent account.
+- [x] Real agent-account HTTP reachability of the discovered SearXNG endpoint.
+- [x] Reproduced Hermes gateway user-service failure when the agent lacked a user
+  D-Bus/systemd session; branch now prepares the user manager and optionally enables
+  tracked systemd linger before setup.
+- [x] Reproduced SearXNG configuration mismatch when `SEARXNG_URL` was written as an
+  arbitrary YAML key; branch now persists it through Hermes' `.env` writer.
 
-The current execution environment cannot clone GitHub directly, so the feature
-branch still needs real-machine end-to-end testing before merge.
+### Live test observations, 2026-09-07
+
+The first real-machine test exposed several useful distinctions:
+
+- Hermes installation originally failed because the root installer invoked Hermes as
+  the agent user while retaining the human user's working directory. `uv` encountered
+  the human checkout's inaccessible `.venv`. Resetting the agent working directory to
+  its own home fixed the install without weakening filesystem isolation.
+- Quick LAN discovery uses the kernel neighbor table. SearXNG at
+  `http://192.168.77.249:8089` was discoverable once the `hq` host was present in that
+  table. This confirms service probing works while also identifying cold-start host
+  discovery as an area for improvement.
+- ComfyUI was also discovered at `http://192.168.77.249:8188` but deliberately left
+  disabled during the review step.
+- Ollama, Firecrawl, and Honcho on `hq` were correctly absent from LAN discovery. They
+  are intentionally exposed through a restricted WireGuard service gateway at
+  `10.68.0.1`, not directly on the home LAN.
+- `hq` uses a `wireguard-agent` container with `wg0=10.68.0.1/32`; `agent-proxy`
+  shares that container's network namespace and binds selected HAProxy frontends for
+  Ollama, SearXNG, ComfyUI, Firecrawl, and Honcho. This motivates a future saved
+  service-gateway abstraction rather than trying to infer those endpoints from an
+  inactive VPN route.
+- Hermes setup migrated config to v41 successfully, but gateway service installation
+  failed under a plain `sudo -u` invocation because the service account had no user
+  systemd D-Bus. The current branch now prepares that manager and can enable linger.
 
 Still to verify on a disposable or test Linux setup:
 
@@ -96,17 +139,20 @@ Still to verify on a disposable or test Linux setup:
 - [ ] Overlap rejection and restoration of shared parent-traversal permissions.
 - [ ] Recovery after interrupted operations or failed ACL restoration.
 - [ ] Fresh install, reuse of an existing account, root rejection, and account-change protection.
-- [ ] Hermes fresh install, reuse of a pre-existing Hermes runtime, and deliberate
-  Hermes-install skip.
-- [ ] Local service discovery against real Ollama/SearXNG/Firecrawl/Honcho/ComfyUI services.
-- [ ] Quick LAN discovery on a normal Ethernet/Wi-Fi route.
+- [ ] Full installer-driven Hermes fresh install after the working-directory fix, including
+  provenance recording rather than the manual recovery used in the first test.
+- [ ] Hermes reuse of a pre-existing runtime and deliberate Hermes-install skip.
+- [ ] Re-run service apply after the `.env` persistence fix and verify Hermes reports
+  SearXNG as configured and usable.
+- [ ] Hermes gateway service installation after user-systemd/linger preparation.
+- [ ] Quick LAN discovery from a cold neighbor table without prior contact with the target host.
 - [ ] VPN discovery where no neighbor table exists, including direct URL entry and
   an explicitly approved full scan.
-- [ ] Agent-account reachability of services found by root during discovery.
+- [ ] Saved service-gateway behavior for endpoints reachable only through a conditional VPN path.
 - [ ] Hermes setup/configuration behavior with real provider credentials and a
   self-hosted Honcho instance.
 - [ ] Uninstall behavior for journal membership, retained accounts, agent-owned files,
-  Hermes provenance, package provenance, and reported residual state.
+  Hermes provenance, systemd-linger provenance, package provenance, and reported residual state.
 
 One non-destructive wording/provenance refinement remains: the current install state
 records whether Hermes was installed by Archangel, but `no` can mean either that
@@ -130,6 +176,13 @@ report them precisely.
 - `5603424`: documented service discovery and the Hermes configuration boundary.
 - `5b2325e`: documented installation, post-install service management, and Hermes
   uninstall provenance.
+- `d29e8d2`: reset agent commands to the agent home before execution.
+- `439eaa7`: added the agent working-directory regression test.
+- `08d4e9f`: moved Hermes service environment settings to Hermes' `.env` writer and
+  added user-systemd runtime support.
+- `945e2ab`: prepared the agent user manager and tracked optional linger during install.
+- `d31cabb`: added linger-aware uninstall behavior.
+- `17c3727`: expanded Hermes helper regression coverage for `.env` persistence.
 
 Keep implementation updates, validation results, and open issues here as work
 continues. Update the README when the project's purpose or documentation entry
