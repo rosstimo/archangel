@@ -147,6 +147,9 @@ Development checks completed for the service-discovery work:
 - [x] Real saved-gateway unavailable-path behavior: after intentionally removing
   `wg-agent`, `hq` reported `interface-down`, retained all seven definitions, and
   skipped service probes instead of deleting state or starting the VPN.
+- [x] Real saved-gateway recovery across a full `wg-agent` down/up cycle using the
+  same persistent gateway/service files: all seven probes resumed after recovery and
+  SHA-256 checksums for both state files remained unchanged throughout the cycle.
 - [x] Real routed-host quick VPN discovery through the normal network-discovery path:
   Linux reported `10.68.0.1 dev wg-agent`, Archangel normalized it to
   `10.68.0.1/32`, classified it as VPN, and discovered all seven HQ services without
@@ -188,12 +191,13 @@ The real-machine tests exposed several useful distinctions:
   and the parser discarded destinations without `/`. Normalizing bare IPv4 route
   destinations to `/32` fixed the issue. A repeat quick-discovery run then found all
   seven HQ services directly over `wg-agent` with no ARP/neighbor entry.
-- The saved-gateway live test confirmed both sides of the availability boundary tested
-  so far: with `wg-agent` active the seven HQ services probed successfully; after the
-  interface was removed the same saved gateway remained present as `interface-down`
-  and no probes were sent. The temporary test state was deleted after bringing the
-  VPN back up, so recovery of that exact saved state after reactivation remains to be
-  exercised separately.
+- The saved-gateway persistence test used the same `gateways.tsv` and `services.tsv`
+  across a complete `wg-agent` up, down, and up-again cycle. With the interface down,
+  Archangel reported `interface-down`, retained all seven definitions, and sent no
+  probes. After the interface returned, the same definitions immediately reported
+  `up:wg-agent` and all seven service probes succeeded again. SHA-256 checksums for
+  both files were identical before transport loss, while down, and after recovery,
+  confirming that availability changes do not mutate saved gateway state.
 - The first Hermes setup attempt reproduced a user-service failure under a plain
   `sudo -u` invocation. The fresh installer-driven run then successfully enabled
   tracked linger and brought up the agent's user systemd manager before Hermes setup.
@@ -226,8 +230,6 @@ Still to verify on a disposable or test Linux setup:
   matching sudoers rule.
 - [ ] Conservative browser/computer-use and full-Hermes-setup defaults on a fresh run.
 - [ ] Quick LAN discovery from a cold neighbor table without prior contact with the target host.
-- [ ] Saved gateway recovery using the same persistent gateway/service records across
-  an intentional `wg-agent` down/up cycle.
 - [ ] Uninstall behavior when the agent account, Hermes runtime, or linger state existed
   before Archangel and therefore must be preserved.
 
