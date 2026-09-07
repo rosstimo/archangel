@@ -4,7 +4,16 @@
 # Callers provide: STATE_DIR, ARCHANGEL_AGENT_USER, say, ask, yes_no.
 
 ARCHANGEL_SERVICES_FILE=${ARCHANGEL_SERVICES_FILE:-${STATE_DIR:-/var/lib/archangel}/services.tsv}
-ARCHANGEL_KNOWN_PORTS=(11434 8080 8089 3002 8000 8188)
+ARCHANGEL_GATEWAYS_FILE=${ARCHANGEL_GATEWAYS_FILE:-${STATE_DIR:-/var/lib/archangel}/gateways.tsv}
+ARCHANGEL_KNOWN_PORTS=(11431 11432 11433 11434 8080 8089 3002 8000 8188)
+
+archangel_gateways_init() {
+    install -d -m 0750 "${STATE_DIR:-/var/lib/archangel}"
+    if [[ ! -e "$ARCHANGEL_GATEWAYS_FILE" ]]; then
+        printf '# name\taddress\tinterface\ttransport\n' > "$ARCHANGEL_GATEWAYS_FILE"
+    fi
+    chmod 0640 "$ARCHANGEL_GATEWAYS_FILE"
+}
 
 archangel_services_init() {
     install -d -m 0750 "${STATE_DIR:-/var/lib/archangel}"
@@ -12,6 +21,7 @@ archangel_services_init() {
         printf '# enabled\ttype\turl\tsource\tinterface\tmanaged\n' > "$ARCHANGEL_SERVICES_FILE"
     fi
     chmod 0640 "$ARCHANGEL_SERVICES_FILE"
+    archangel_gateways_init
 }
 
 archangel_normalize_url() {
@@ -112,6 +122,163 @@ archangel_record_service() {
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$enabled" "$type" "$url" "$source" "$iface" "$managed" >> "$ARCHANGEL_SERVICES_FILE"
 }
 
+archangel_valid_gateway_name() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+archangel_record_gateway() {
+    local name=$1 address=$2 iface=${3:--} transport=${4:-auto} tmp
+    archangel_valid_gateway_name "$name" || {
+        say "Gateway name '$name' is invalid. Use letters, numbers, dot, underscore, or dash."
+        return 2
+    }
+    [[ -n "$address" && "$address" != *$'\t'* && "$address" != *$'\n'* ]] || return 2
+    [[ "$iface" != *$'\t'* && "$transport" != *$'\t'* ]] || return 2
+    archangel_gateways_init
+
+    tmp=$(mktemp)
+    awk -F '\t' -v OFS='\t' -v n="$name" -v a="$address" -v i="$iface" -v t="$transport" '
+        BEGIN {updated=0}
+        /^#/ {print; next}
+        $1 == n {print n,a,i,t; updated=1; next}
+        {print}
+        END {if (!updated) print n,a,i,t}
+    ' "$ARCHANGEL_GATEWAYS_FILE" > "$tmp"
+    install -m 0640 "$tmp" "$ARCHANGEL_GATEWAYS_FILE"
+    rm -f "$tmp"
+}
+
+archangel_gateway_row() {
+    local name=$1
+    archangel_gateways_init
+    awk -F '\t' -v n="$name" '$1 !~ /^#/ && $1 == n {print; exit}' "$ARCHANGEL_GATEWAYS_FILE"
+}
+
+archangel_gateway_resolve_ipv4() {
+    local address=$1
+    if [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        printf '%s' "$address"
+        return 0
+    fi
+    getent ahostsv4 "$address" 2>/dev/null | awk 'NR==1 {print $1}'
+}
+
+archangel_gateway_route_iface() {
+    local address=$1 ip
+    command -v ip >/dev/null 2>&1 || return 1
+    ip=$(archangel_gateway_resolve_ipv4 "$address" || true)
+    [[ -n "$ip" ]] || return 1
+    ip -o -4 route get "$ip" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev" && (i+1)<=NF) {print $(i+1); exit}}'
+}
+
+archangel_gateway_path_state() {
+    local address=$1 expected=${2:--} actual
+    if [[ "$expected" != - ]]; then
+        ip link show dev "$expected" >/dev/null 2>&1 || {
+            printf 'interface-down'
+            return 0
+        }
+    fi
+    actual=$(archangel_gateway_route_iface "$address" || true)
+    [[ -n "$actual" ]] || {
+        printf 'no-route'
+        return 0
+    }
+    if [[ "$expected" != - && "$actual" != "$expected" ]]; then
+        printf 'route-via:%s' "$actual"
+    else
+        printf 'up:%s' "$actual"
+    fi
+}
+
+archangel_gateway_service_counts() {
+    local name=$1 total=0 enabled=0 row_enabled type url source iface managed
+    archangel_services_init
+    while IFS=$'\t' read -r row_enabled type url source iface managed; do
+        [[ -n "$row_enabled" && "$row_enabled" != \#* ]] || continue
+        [[ "$source" == "gateway:$name/"* ]] || continue
+        ((total+=1))
+        [[ "$row_enabled" == yes ]] && ((enabled+=1))
+    done < "$ARCHANGEL_SERVICES_FILE"
+    printf '%s/%s' "$enabled" "$total"
+}
+
+archangel_gateways_status() {
+    archangel_gateways_init
+    printf '%-18s %-24s %-14s %-12s %-20s %-8s\n' NAME ADDRESS INTERFACE TRANSPORT PATH SERVICES
+    local name address iface transport path counts
+    while IFS=$'\t' read -r name address iface transport; do
+        [[ -n "$name" && "$name" != \#* ]] || continue
+        path=$(archangel_gateway_path_state "$address" "$iface")
+        counts=$(archangel_gateway_service_counts "$name")
+        printf '%-18s %-24s %-14s %-12s %-20s %-8s\n' "$name" "$address" "$iface" "$transport" "$path" "$counts"
+    done < "$ARCHANGEL_GATEWAYS_FILE"
+}
+
+archangel_gateway_add_service() {
+    local gateway=$1 service_name=$2 port=$3 type=${4:-} scheme=${5:-http}
+    local row name address iface transport url detected
+    [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || {
+        say "Invalid service port: $port"
+        return 2
+    }
+    archangel_valid_gateway_name "$service_name" || {
+        say "Service name '$service_name' is invalid."
+        return 2
+    }
+    row=$(archangel_gateway_row "$gateway")
+    [[ -n "$row" ]] || {
+        say "Unknown gateway '$gateway'."
+        return 2
+    }
+    IFS=$'\t' read -r name address iface transport <<<"$row"
+    url="$scheme://$address:$port"
+    if [[ -z "$type" ]]; then
+        detected=$(archangel_identify_url "$url" || true)
+        type=${detected:-other}
+    fi
+    archangel_record_service "$type" "$url" "gateway:$gateway/$service_name" "$iface" no yes
+    say "Recorded $service_name ($type) at $url through gateway '$gateway'."
+}
+
+archangel_probe_gateway() {
+    local wanted=${1:-} name address iface transport path
+    local enabled type url source service_iface managed service_name found=0 failed=0 matched=0
+    archangel_gateways_init
+    archangel_services_init
+
+    while IFS=$'\t' read -r name address iface transport; do
+        [[ -n "$name" && "$name" != \#* ]] || continue
+        [[ -z "$wanted" || "$name" == "$wanted" ]] || continue
+        matched=1
+        path=$(archangel_gateway_path_state "$address" "$iface")
+        say
+        say "Gateway $name ($address): $path"
+        if [[ "$path" != up:* ]]; then
+            say "  saved definition retained; no probes sent"
+            continue
+        fi
+        while IFS=$'\t' read -r enabled type url source service_iface managed; do
+            [[ -n "$enabled" && "$enabled" != \#* ]] || continue
+            [[ "$source" == "gateway:$name/"* ]] || continue
+            service_name=${source#"gateway:$name/"}
+            if archangel_probe_service "$type" "$url"; then
+                printf '  ok   %-20s %-12s %s\n' "$service_name" "$type" "$url"
+                ((found+=1))
+            else
+                printf '  FAIL %-20s %-12s %s\n' "$service_name" "$type" "$url"
+                ((failed+=1))
+            fi
+        done < "$ARCHANGEL_SERVICES_FILE"
+    done < "$ARCHANGEL_GATEWAYS_FILE"
+
+    if [[ -n "$wanted" && "$matched" -eq 0 ]]; then
+        say "Unknown gateway '$wanted'."
+        return 2
+    fi
+    (( failed == 0 ))
+}
+
 archangel_probe_known_host() {
     local host=$1 source=${2:-network} iface=${3:--}
     local found=0
@@ -124,6 +291,9 @@ archangel_probe_known_host() {
             found=1
         fi
     done <<'SERVICES'
+ollama 11431
+ollama 11432
+ollama 11433
 ollama 11434
 searxng 8080
 searxng 8089
@@ -221,7 +391,7 @@ archangel_discover_networks() {
         return 0
     fi
 
-    local rows=() cidr iface kind default answer depth host
+    local rows=() cidr iface kind default depth host
     while IFS=$'\t' read -r cidr iface; do
         [[ -n "$cidr" ]] || continue
         kind=$(archangel_route_kind "$iface")
@@ -255,14 +425,19 @@ archangel_discover_networks() {
                 archangel_full_scan_route "$cidr" "$iface" || true
                 ;;
             *)
-                say "Checking known neighbor hosts on $iface within $cidr..."
+                say "Checking directly routed and known neighbor hosts on $iface within $cidr..."
                 local quick_hosts=()
-                mapfile -t quick_hosts < <(archangel_quick_hosts_for_route "$cidr" "$iface")
+                mapfile -t quick_hosts < <(
+                    archangel_quick_hosts_for_route "$cidr" "$iface"
+                    [[ "$cidr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/32$ ]] && printf '%s\n' "${cidr%/32}"
+                )
                 if (( ${#quick_hosts[@]} == 0 )); then
-                    say "  no known neighbor hosts found for this route"
-                    [[ "$kind" == vpn ]] && say "  VPN routes often have no neighbor table; use a full scan or add a direct URL if needed."
+                    say "  no directly routed or known neighbor hosts found for this route"
+                    [[ "$kind" == vpn ]] && say "  VPN routes often have no neighbor table; use a saved gateway, full scan, or direct URL if needed."
                 else
-                    for host in "${quick_hosts[@]}"; do archangel_probe_known_host "$host" quick "$iface" || true; done
+                    while read -r host; do
+                        [[ -n "$host" ]] && archangel_probe_known_host "$host" quick "$iface" || true
+                    done < <(printf '%s\n' "${quick_hosts[@]}" | sort -u)
                 fi
                 ;;
         esac
@@ -313,10 +488,10 @@ archangel_review_services() {
 
 archangel_services_status() {
     archangel_services_init
-    printf '%-8s %-20s %-40s %-10s %-12s\n' ENABLED TYPE URL SOURCE INTERFACE
+    printf '%-8s %-20s %-40s %-24s %-12s\n' ENABLED TYPE URL SOURCE INTERFACE
     while IFS=$'\t' read -r enabled type url source iface managed; do
         [[ -n "$enabled" && "$enabled" != \#* ]] || continue
-        printf '%-8s %-20s %-40s %-10s %-12s\n' "$enabled" "$type" "$url" "$source" "$iface"
+        printf '%-8s %-20s %-40s %-24s %-12s\n' "$enabled" "$type" "$url" "$source" "$iface"
     done < "$ARCHANGEL_SERVICES_FILE"
 }
 
