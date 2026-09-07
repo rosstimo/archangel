@@ -106,7 +106,7 @@ This is deliberate. A parent and child grant with independent rollback
 snapshots can otherwise overwrite one another during revocation. Non-overlapping
 grants may share inaccessible parent directories; Archangel reference-counts
 those traversal-only ACLs and restores the original parent ACL when the last
-dependent grant is removed.
+independent grant is removed.
 
 ## Journal access
 
@@ -148,17 +148,51 @@ restoration fails, uninstall stops and keeps the state files needed for another
 attempt rather than deleting evidence of what changed.
 
 It then restores the agent's pre-install journal membership and removes the
-Archangel binaries, configuration, and state directory. If Archangel created
-the agent account, the uninstaller offers to remove that account and its home
-directory. An account that existed before Archangel is never removed
-implicitly.
+Archangel binaries, configuration, libraries, and state directory. If
+Archangel created the agent account, the uninstaller offers to remove that
+account and its home directory. An account that existed before Archangel is
+never removed implicitly.
 
 If an Archangel-created agent owns files inside previously managed trees, the
 uninstaller offers to reassign those files to the configured human owner before
 deleting the account so it does not silently leave orphaned numeric ownership.
 
-Shared system packages such as the distro's `acl` package are not removed by
-uninstall.
+At the end, the uninstaller prints a **What may remain** report with the items
+that Archangel intentionally does not remove and manual cleanup guidance.
+Depending on how the machine was configured, those can include:
+
+- **The agent account and home directory.** A pre-existing account is always
+  preserved, and an Archangel-created account remains if the user chooses to
+  keep it. If it is no longer needed, remove it manually with `userdel -r`
+  after reviewing its files.
+- **The distro `acl` package.** The installer now records whether Archangel had
+  to install this package. Uninstall leaves it installed because another
+  program may depend on it. If Archangel installed it and the user wants it
+  gone, the uninstall report prints the appropriate package-manager command.
+- **The Git source checkout.** The directory from which `install.sh` was run is
+  not part of the installed system state. Delete that clone manually if it is
+  no longer wanted.
+- **Files owned by the agent outside managed grant trees.** Archangel does not
+  scan the entire machine during uninstall. The report preserves the numeric
+  UID and prints a `find` command that can be used to locate remaining files
+  before changing ownership or deleting them.
+- **Software or data installed separately from Archangel.** An AI runtime such
+  as Hermes, downloaded models, containers, systemd services, caches,
+  repositories, and similar data are untouched unless Archangel itself created
+  and tracked them.
+
+For example, after an uninstall the ownership audit shown by the script is
+similar to:
+
+```bash
+sudo find / \
+  \( -path /proc -o -path /sys -o -path /dev -o -path /run \) -prune -o \
+  -uid AGENT_UID -print 2>/dev/null
+```
+
+Review those results before changing ownership or deleting anything. The goal
+is to make residual state visible without having an uninstall script guess that
+a shared package, user account, runtime, or unrelated file is safe to remove.
 
 ## First task
 
