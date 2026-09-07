@@ -21,10 +21,11 @@ configured agent account. This prevents ACL state belonging to an old agent
 identity from being stranded.
 
 The installer can install Hermes Agent under the dedicated agent account, or
-reuse a Hermes installation that is already present there. It then offers
-optional service discovery. Local-machine discovery is suggested by default;
-LAN/VPN probing, full network scans, and direct URL entry remain explicit user
-choices and can all be skipped.
+reuse a Hermes installation that is already present there. Browser/computer-use
+components and the full Hermes setup wizard are opt-in so the baseline install
+stays conservative. The installer then offers optional service discovery.
+Local-machine discovery is suggested by default; LAN/VPN probing, full network
+scans, and direct URL entry remain explicit user choices and can all be skipped.
 
 After installation:
 
@@ -49,18 +50,18 @@ During installation you may:
 - discover supported services on the local machine;
 - inspect reachable LAN and VPN routes and choose exactly which networks may be
   probed;
-- choose quick discovery from known neighbors or explicitly request a full
-  `nmap` scan for an approved CIDR;
+- choose quick discovery from known neighbors/direct `/32` routes or explicitly
+  request a full `nmap` scan for an approved CIDR;
 - enter service URLs directly instead of scanning;
 - enable or disable each discovered service for Hermes;
-- run the Hermes setup wizard for provider authentication and other Hermes-owned
-  settings;
+- optionally run the Hermes setup wizard for provider authentication and other
+  Hermes-owned settings;
 - verify selected endpoints from the agent account and run `hermes doctor`.
 
 The initial known-service set includes Ollama, SearXNG, Firecrawl, Honcho,
 ComfyUI, and OpenAI-compatible endpoints. See
 [`service-discovery.md`](service-discovery.md) for the current probes,
-configuration boundary, and network-discovery behavior.
+configuration boundary, saved gateways, and network-discovery behavior.
 
 Discovery and configuration can be revisited after installation:
 
@@ -80,6 +81,45 @@ Service records are stored in `/var/lib/archangel/services.tsv`, including how
 the endpoint was found and whether Archangel manages it. A service merely found
 on localhost, a LAN, or a VPN is not considered Archangel-owned and will not be
 removed by uninstall.
+
+### Saved service gateways
+
+A saved service gateway groups multiple named endpoints behind a host that may
+only be reachable through an independently managed VPN or other conditional
+network path. Archangel stores the gateway metadata but does not create keys,
+edit VPN configuration, or bring the hinted interface up or down.
+
+For the current HQ WireGuard path, for example:
+
+```bash
+sudo archangel-services gateway add hq 10.68.0.1 wg-agent wireguard
+
+sudo archangel-services gateway service hq ollama-4060ti 11431 ollama
+sudo archangel-services gateway service hq ollama-2080    11432 ollama
+sudo archangel-services gateway service hq ollama-cpu     11433 ollama
+sudo archangel-services gateway service hq searxng        8089  searxng
+sudo archangel-services gateway service hq comfyui        8188  comfyui
+sudo archangel-services gateway service hq firecrawl      3002  firecrawl
+sudo archangel-services gateway service hq honcho         8000  honcho
+```
+
+Check the saved path without probing services:
+
+```bash
+sudo archangel-services gateway status
+```
+
+Probe one or all saved gateways:
+
+```bash
+sudo archangel-services gateway probe hq
+sudo archangel-services gateway probe
+```
+
+If `wg-agent` is down, the gateway remains saved and is reported as unavailable;
+Archangel does not start WireGuard automatically. Gateway definitions live in
+`/var/lib/archangel/gateways.tsv`. Uninstall removes that Archangel metadata but
+leaves the VPN, remote system, services, containers, and models untouched.
 
 ## Filesystem access
 
@@ -221,7 +261,8 @@ Depending on how the machine was configured, those can include:
   UID and prints a `find` command that can be used to locate remaining files
   before changing ownership or deleting them.
 - **Discovered or separately installed services and data.** LAN/VPN services,
-  containers, models, and software that Archangel did not install are untouched.
+  saved gateway targets, containers, models, and software that Archangel did
+  not install are untouched.
 
 For example, after an uninstall the ownership audit shown by the script is
 similar to:
