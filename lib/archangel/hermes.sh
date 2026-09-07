@@ -7,6 +7,10 @@ archangel_agent_home() {
     getent passwd "$ARCHANGEL_AGENT_USER" | cut -d: -f6
 }
 
+archangel_agent_uid() {
+    getent passwd "$ARCHANGEL_AGENT_USER" | cut -d: -f3
+}
+
 archangel_hermes_bin() {
     local home
     home=$(archangel_agent_home)
@@ -20,13 +24,81 @@ archangel_hermes_bin() {
     return 1
 }
 
-archangel_run_as_agent() {
+archangel_hermes_python() {
     local home
     home=$(archangel_agent_home)
-    runuser -u "$ARCHANGEL_AGENT_USER" -- env \
-        HOME="$home" USER="$ARCHANGEL_AGENT_USER" LOGNAME="$ARCHANGEL_AGENT_USER" \
-        PATH="$home/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+    local path
+    for path in \
+        "$home/.hermes/hermes-agent/venv/bin/python" \
+        "$home/.hermes/hermes-agent/venv/bin/python3"; do
+        [[ -x "$path" ]] && { printf '%s' "$path"; return 0; }
+    done
+    return 1
+}
+
+archangel_run_as_agent() {
+    local home uid runtime_dir
+    home=$(archangel_agent_home)
+    uid=$(archangel_agent_uid)
+    runtime_dir="/run/user/$uid"
+
+    local -a env_args=(
+        "HOME=$home"
+        "USER=$ARCHANGEL_AGENT_USER"
+        "LOGNAME=$ARCHANGEL_AGENT_USER"
+        "PATH=$home/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    )
+    if [[ -d "$runtime_dir" ]]; then
+        env_args+=("XDG_RUNTIME_DIR=$runtime_dir")
+        if [[ -S "$runtime_dir/bus" ]]; then
+            env_args+=("DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime_dir/bus")
+        fi
+    fi
+
+    runuser -u "$ARCHANGEL_AGENT_USER" -- env "${env_args[@]}" \
         bash -c 'cd "$HOME" && exec "$@"' archangel-agent "$@"
+}
+
+archangel_prepare_user_systemd() {
+    local enable_linger=${1:-no}
+    ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL=${ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL:-no}
+
+    [[ -d /run/systemd/system ]] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+
+    local uid runtime_dir
+    uid=$(archangel_agent_uid)
+    runtime_dir="/run/user/$uid"
+
+    if [[ "$enable_linger" == yes && ! -e "/var/lib/systemd/linger/$ARCHANGEL_AGENT_USER" ]]; then
+        if command -v loginctl >/dev/null 2>&1; then
+            say "Enabling systemd linger for '$ARCHANGEL_AGENT_USER' so Hermes user services can survive logout..."
+            if loginctl enable-linger "$ARCHANGEL_AGENT_USER"; then
+                ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL=yes
+            else
+                say "Could not enable systemd linger for '$ARCHANGEL_AGENT_USER'."
+            fi
+        else
+            say "loginctl is unavailable; systemd linger could not be enabled."
+        fi
+    fi
+
+    if [[ ! -S "$runtime_dir/bus" ]]; then
+        systemctl start "user@$uid.service" >/dev/null 2>&1 || true
+        local i
+        for ((i=0; i<25; i++)); do
+            [[ -S "$runtime_dir/bus" ]] && break
+            sleep 0.2
+        done
+    fi
+
+    if [[ -S "$runtime_dir/bus" ]]; then
+        say "User systemd manager is available for '$ARCHANGEL_AGENT_USER'."
+        return 0
+    fi
+
+    say "User systemd D-Bus is not available for '$ARCHANGEL_AGENT_USER'; Hermes gateway service setup may need to be retried later."
+    return 1
 }
 
 archangel_install_package_for_command() {
@@ -104,6 +176,26 @@ archangel_hermes_config_set() {
     local key=$1 value=$2
     [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]] || return 1
     archangel_run_as_agent "$ARCHANGEL_HERMES_BIN" config set "$key" "$value"
+}
+
+archangel_hermes_config_unset() {
+    local key=$1
+    [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]] || return 1
+    archangel_run_as_agent "$ARCHANGEL_HERMES_BIN" config unset "$key"
+}
+
+archangel_hermes_env_set() {
+    local key=$1 value=$2 python home
+    python=$(archangel_hermes_python || true)
+    home=$(archangel_agent_home)
+    if [[ -z "$python" ]]; then
+        say "Could not locate the Hermes Python environment needed to save $key."
+        return 1
+    fi
+    archangel_run_as_agent "$python" -c \
+        'from hermes_cli.config import save_env_value; import sys; save_env_value(sys.argv[1], sys.argv[2])' \
+        "$key" "$value"
+    say "Saved $key in $home/.hermes/.env"
 }
 
 archangel_first_enabled_service() {
@@ -199,19 +291,22 @@ archangel_apply_service_config() {
     local url
     url=$(archangel_choose_enabled_service searxng SearXNG || true)
     if [[ -n "$url" ]]; then
-        archangel_hermes_config_set SEARXNG_URL "$url"
+        archangel_hermes_env_set SEARXNG_URL "$url"
+        archangel_hermes_config_unset SEARXNG_URL >/dev/null 2>&1 || true
         archangel_hermes_config_set web.search_backend searxng
     fi
 
     url=$(archangel_choose_enabled_service firecrawl Firecrawl || true)
     if [[ -n "$url" ]]; then
-        archangel_hermes_config_set FIRECRAWL_API_URL "$url"
+        archangel_hermes_env_set FIRECRAWL_API_URL "$url"
+        archangel_hermes_config_unset FIRECRAWL_API_URL >/dev/null 2>&1 || true
         archangel_hermes_config_set web.extract_backend firecrawl
     fi
 
     url=$(archangel_choose_enabled_service honcho Honcho || true)
     if [[ -n "$url" ]]; then
-        archangel_hermes_config_set HONCHO_BASE_URL "$url"
+        archangel_hermes_env_set HONCHO_BASE_URL "$url"
+        archangel_hermes_config_unset HONCHO_BASE_URL >/dev/null 2>&1 || true
         say "Honcho endpoint saved for Hermes: $url"
         if yes_no "Run Hermes memory setup now to enable/configure Honcho?" N; then
             archangel_run_as_agent "$ARCHANGEL_HERMES_BIN" memory setup
