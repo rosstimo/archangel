@@ -99,7 +99,7 @@ case "${1:-wizard}" in
                 say "Saved gateway '$name' at $address (interface=$iface, transport=$transport)."
                 ;;
             service)
-                [[ $# -ge 6 ]] || die "usage: archangel-services gateway service GATEWAY NAME PORT [TYPE] [SCHEME]"
+                [[ $# -ge 5 ]] || die "usage: archangel-services gateway service GATEWAY NAME PORT [TYPE] [SCHEME]"
                 gateway=$3
                 service_name=$4
                 port=$5
