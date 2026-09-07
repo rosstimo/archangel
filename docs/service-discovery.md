@@ -30,10 +30,15 @@ virtual, or public-looking routes are not selected by default.
 
 ### Quick network discovery
 
-Quick discovery probes only hosts already present in the kernel neighbor table for
-the approved route. It does not walk every address in the subnet. This is useful
-on ordinary Ethernet/Wi-Fi networks, but tunnel interfaces such as WireGuard often
-have no neighbor table.
+Quick discovery probes hosts already present in the kernel neighbor table for the
+approved route. For an explicitly routed IPv4 `/32`, Archangel also probes that
+single address directly. This matters for point-to-point tunnels such as
+WireGuard, where a route like `10.68.0.1/32 dev wg-agent` identifies the target
+without any ARP/neighbor entry.
+
+A broader VPN route may still have no neighbor table and no single target to infer.
+Use a saved service gateway, a deliberately approved full scan, or direct endpoint
+entry in that case.
 
 ### Full network discovery
 
@@ -44,13 +49,84 @@ Archangel asks before installing `nmap` if it is missing.
 A full scan is never started merely because a route exists. The user must approve
 the route and choose `full` for that route.
 
+## Saved service gateways
+
+A service gateway is a persistent Archangel description of a host that exposes
+multiple useful services, especially when the route to that host exists only while
+an independently managed VPN is active.
+
+A gateway records:
+
+- a short name;
+- host/IP address;
+- optional interface hint;
+- optional transport description such as `wireguard`.
+
+Archangel does **not** create VPN keys, edit WireGuard/OpenVPN configuration, bring
+the hinted interface up or down, or assume ownership of the remote gateway. The
+interface and transport fields are hints used to report whether the expected path
+currently exists.
+
+For example, a restricted HQ service gateway reachable only through `wg-agent`
+can be recorded as:
+
+```bash
+sudo archangel-services gateway add hq 10.68.0.1 wg-agent wireguard
+
+sudo archangel-services gateway service hq ollama-4060ti 11431 ollama
+sudo archangel-services gateway service hq ollama-2080    11432 ollama
+sudo archangel-services gateway service hq ollama-cpu     11433 ollama
+sudo archangel-services gateway service hq searxng        8089  searxng
+sudo archangel-services gateway service hq comfyui        8188  comfyui
+sudo archangel-services gateway service hq firecrawl      3002  firecrawl
+sudo archangel-services gateway service hq honcho         8000  honcho
+```
+
+The service name is descriptive metadata. The service itself is still stored in
+the normal service registry, with provenance such as `gateway:hq/honcho`, so the
+existing Hermes integration code can use it without a second endpoint model.
+
+If quick/full discovery already recorded the same type and URL, explicitly adding
+it to a gateway adopts that record instead of creating a duplicate. Gateway
+provenance is preferred because it remains meaningful when the transient route is
+later absent.
+
+Inspect saved gateways without sending probes:
+
+```bash
+sudo archangel-services gateway status
+```
+
+The `PATH` column reports conditions such as `up:wg-agent`, `interface-down`,
+`no-route`, or a route through an unexpected interface. A gateway remains saved
+when its path is unavailable.
+
+Probe the services for one gateway, or all saved gateways:
+
+```bash
+sudo archangel-services gateway probe hq
+sudo archangel-services gateway probe
+```
+
+If the expected interface/route is absent, no service probes are sent and the
+saved definition is retained. Archangel does not automatically activate the VPN.
+
+Gateway definitions are stored in:
+
+```text
+/var/lib/archangel/gateways.tsv
+```
+
+They are Archangel state and disappear with Archangel uninstall, but the VPN,
+remote system, containers, models, and services described by them are untouched.
+
 ## Known services
 
 The initial discovery definitions are:
 
 | Service | Typical port | Probe/integration |
 | --- | ---: | --- |
-| Ollama | 11434 | `/api/tags` or OpenAI-compatible `/v1/models`; may be selected as Hermes' custom model endpoint. |
+| Ollama | 11434, plus configured gateway ports such as 11431-11433 | `/api/tags` or OpenAI-compatible `/v1/models`; may be selected as Hermes' custom model endpoint. |
 | SearXNG | 8080 / 8089 | Identifies the SearXNG web service; configures `SEARXNG_URL` and `web.search_backend`. |
 | Firecrawl | 3002 | Health endpoint; configures `FIRECRAWL_API_URL` and `web.extract_backend`. |
 | Honcho | 8000 | `/health` or `/openapi.json`; records `HONCHO_BASE_URL` and can launch `hermes memory setup`. |
@@ -60,7 +136,7 @@ The initial discovery definitions are:
 The service registry is deliberately small and identifiable. Archangel is not a
 general-purpose port scanner.
 
-## Stored state
+## Stored service state
 
 Discovered services are recorded in:
 
@@ -73,11 +149,11 @@ Each entry tracks:
 - whether the user enabled it for Hermes;
 - service type;
 - URL;
-- how it was found (`local`, `quick`, `full`, or `manual`);
+- how it was found (`local`, `quick`, `full`, `manual`, or `gateway:NAME/SERVICE`);
 - network interface when applicable;
 - whether Archangel manages the service itself.
 
-Currently discovered services are always `managed=no`.
+Currently discovered and gateway-referenced services are always `managed=no`.
 
 View the current registry with:
 
@@ -115,8 +191,8 @@ During installation Archangel can:
 - hand a Honcho endpoint to Hermes and launch the Hermes memory wizard;
 - configure a selected Ollama model as a custom endpoint, including an optional
   explicit served context length;
-- launch `hermes setup` for model-provider authentication, tools, messaging, and
-  settings that Hermes should own itself.
+- optionally launch `hermes setup` for model-provider authentication, tools,
+  messaging, and settings that Hermes should own itself.
 
 This keeps OAuth credentials, API keys, provider behavior, and Hermes schema
 migration inside Hermes while Archangel handles host/network discovery and the
