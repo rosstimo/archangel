@@ -165,6 +165,7 @@ fi
 
 rm -f /usr/local/bin/archangel-access
 rm -f /usr/local/bin/archangel-diagnostic
+rm -f /usr/local/bin/archangel-hermes
 rm -f /usr/local/bin/archangel-services
 rm -f /usr/local/bin/archangel-uninstall
 rm -rf /usr/local/lib/archangel
