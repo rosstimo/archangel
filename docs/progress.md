@@ -5,7 +5,7 @@ describes the project; [installation and usage](usage.md) documents its commands
 
 ## Implementation status
 
-As of 2026-09-07, `feature/hermes-service-discovery` extends the host bootstrap
+As of 2026-09-08, `feature/hermes-service-discovery` extends the host bootstrap
 through Hermes installation, user-controlled service discovery, and persistent
 service-gateway metadata. It has not yet been merged to `main`.
 
@@ -156,8 +156,21 @@ Development checks completed for the service-discovery work:
   requiring a neighbor-table entry.
 - [x] Discovery and Hermes unit suites passed after adding host-route normalization
   coverage and correcting the tab-delimited service fixture.
+- [x] Fresh 2026-09-08 installer run created `jimmy`, installed Hermes 0.21.1,
+  enabled tracked linger, skipped browser/computer-use setup by default, and skipped
+  the full Hermes setup wizard unless explicitly requested.
+- [x] Installer-driven discovery over the NetworkManager-owned `wg-agent` route found
+  all seven HQ services, and Archangel's final reachability check returned HTTP 200
+  for every endpoint while running as the isolated `jimmy` account.
+- [x] Installer-driven Hermes handoff saved SearXNG, Firecrawl, and Honcho endpoint
+  settings; Hermes doctor reported `web search (searxng)` and `web extract (firecrawl)`
+  available. Honcho memory setup and Ollama primary-provider configuration were
+  deliberately left opt-in and not enabled during this run.
+- [x] Installation-time inherited-sudo detection was exercised on the real host. The
+  existing `NOPASSWD: /usr/bin/asdcontrol` rule was shown explicitly and required a
+  positive acknowledgement before installation continued.
 
-### Live test observations, 2026-09-07
+### Live test observations, 2026-09-08
 
 The real-machine tests exposed several useful distinctions:
 
@@ -167,12 +180,17 @@ The real-machine tests exposed several useful distinctions:
   its own home fixed the install without weakening filesystem isolation.
 - A subsequent completely fresh run installed Hermes 0.21.0 through Archangel itself,
   proving the working-directory fix and installation provenance path end to end.
+- The latest fresh run installed Hermes 0.21.1 under a newly created `jimmy` account,
+  with browser/computer-use setup and the full Hermes setup wizard left off by default.
+  This confirms the conservative installer defaults on the real machine.
+- `wg-agent` is now owned by NetworkManager with autoconnect enabled. Archangel only
+  observes the `10.68.0.1/32` route and uses it; it does not own or activate the VPN.
 - Quick LAN discovery uses the kernel neighbor table. SearXNG at
   `http://192.168.77.249:8089` was discoverable once the `hq` host was present in that
   table. This confirms service probing works while also identifying cold-start LAN
   host discovery as an area for improvement.
 - ComfyUI was also discovered at `http://192.168.77.249:8188` but deliberately left
-  disabled during the review step.
+  disabled during the earlier LAN review step.
 - Ollama, Firecrawl, and Honcho on `hq` are intentionally exposed through a restricted
   WireGuard service gateway at `10.68.0.1`, not directly on the home LAN.
 - The Linode `wg-agent-hub` is a real routed WireGuard hub, not a NAT relay. It owns
@@ -191,6 +209,10 @@ The real-machine tests exposed several useful distinctions:
   and the parser discarded destinations without `/`. Normalizing bare IPv4 route
   destinations to `/32` fixed the issue. A repeat quick-discovery run then found all
   seven HQ services directly over `wg-agent` with no ARP/neighbor entry.
+- During the latest installer run, full discovery was selected for the `/32` VPN route.
+  Because the route names only one host, the scan remained limited to `10.68.0.1` and
+  found the same seven HQ services. The final Archangel verification then reached all
+  seven as `jimmy` with HTTP 200, proving the installed isolated-agent path end to end.
 - The saved-gateway persistence test used the same `gateways.tsv` and `services.tsv`
   across a complete `wg-agent` up, down, and up-again cycle. With the interface down,
   Archangel reported `interface-down`, retained all seven definitions, and sent no
@@ -198,25 +220,26 @@ The real-machine tests exposed several useful distinctions:
   `up:wg-agent` and all seven service probes succeeded again. SHA-256 checksums for
   both files were identical before transport loss, while down, and after recovery,
   confirming that availability changes do not mutate saved gateway state.
-- The first Hermes setup attempt reproduced a user-service failure under a plain
-  `sudo -u` invocation. The fresh installer-driven run then successfully enabled
-  tracked linger and brought up the agent's user systemd manager before Hermes setup.
 - SearXNG initially exposed a configuration-boundary bug when its URL was written as
-  an arbitrary YAML key. The fresh run persisted the URL in `.env`, selected the
-  SearXNG backend in `config.yaml`, and verified HTTP reachability as the agent.
+  an arbitrary YAML key. The latest run persisted SearXNG and Firecrawl URLs in
+  `.env`, selected their Hermes backends in `config.yaml`, saved the Honcho endpoint,
+  and confirmed the SearXNG and Firecrawl tools through Hermes doctor.
+- Hermes 0.21.1 doctor still reports the freshly generated config as version `v0`
+  while the current schema is `v41`, and recommends `hermes doctor --fix` or
+  `hermes setup` for migration. This is not currently blocking Archangel's service
+  handoff, but should be resolved before treating the Hermes configuration as final.
+- Browser-related npm advisory warnings remain in the Hermes checkout even though
+  Archangel skipped browser/computer-use setup. The browser and computer-use tools
+  themselves remain system-dependency gated, so these warnings are not blocking the
+  current non-browser baseline.
 - The fresh agent inherited `NOPASSWD: /usr/bin/asdcontrol` because the host contains
   the machine-wide sudoers rule `ALL ALL=(ALL) NOPASSWD: /usr/bin/asdcontrol`.
   Archangel did not create that authority, but it weakens the non-privileged boundary;
   the installer now detects pre-existing sudo command authority and requires explicit
   acknowledgement rather than silently proceeding.
-- Browser automation defaulted on during the validated run, causing the upstream
-  installer to attempt root-only Playwright package setup and fall back to downloaded
-  browser binaries. Archangel now defaults browser/computer-use components off and
-  also defaults the full Hermes setup wizard off, keeping the baseline installation
-  deliberately narrow.
-- A clean uninstall of the installer-created state disabled Archangel-enabled linger,
-  terminated remaining agent processes when approved, removed the agent account/home,
-  and removed `/etc/archangel.conf` and `/var/lib/archangel`.
+- A clean uninstall of an installer-created state previously disabled Archangel-enabled
+  linger, terminated remaining agent processes when approved, removed the agent
+  account/home, and removed `/etc/archangel.conf` and `/var/lib/archangel`.
 
 Still to verify on a disposable or test Linux setup:
 
@@ -226,9 +249,6 @@ Still to verify on a disposable or test Linux setup:
 - [ ] Recovery after interrupted operations or failed ACL restoration.
 - [ ] Reuse of an existing account, root rejection, and account-change protection.
 - [ ] Hermes reuse of a pre-existing runtime and deliberate Hermes-install skip.
-- [ ] Installation-time inherited-sudo warning/acknowledgement on a host with a
-  matching sudoers rule.
-- [ ] Conservative browser/computer-use and full-Hermes-setup defaults on a fresh run.
 - [ ] Quick LAN discovery from a cold neighbor table without prior contact with the target host.
 - [ ] Uninstall behavior when the agent account, Hermes runtime, or linger state existed
   before Archangel and therefore must be preserved.
