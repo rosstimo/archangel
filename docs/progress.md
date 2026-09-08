@@ -169,6 +169,9 @@ Development checks completed for the service-discovery work:
 - [x] Installation-time inherited-sudo detection was exercised on the real host. The
   existing `NOPASSWD: /usr/bin/asdcontrol` rule was shown explicitly and required a
   positive acknowledgement before installation continued.
+- [x] Installed `archangel-services gateway` workflow adopted all seven existing HQ
+  service records from `source=full` into `gateway:hq/...` provenance without
+  duplicates; gateway status reported `up:wg-agent` and all seven named probes passed.
 
 ### Live test observations, 2026-09-08
 
@@ -213,6 +216,10 @@ The real-machine tests exposed several useful distinctions:
   Because the route names only one host, the scan remained limited to `10.68.0.1` and
   found the same seven HQ services. The final Archangel verification then reached all
   seven as `jimmy` with HTTP 200, proving the installed isolated-agent path end to end.
+- The installed gateway commands then converted those seven transient `full` records
+  into persistent named gateway records (`gateway:hq/...`) without creating duplicate
+  endpoints. The resulting gateway reported `up:wg-agent`, all seven probes passed,
+  and the service registry still contained exactly seven enabled HQ records.
 - The saved-gateway persistence test used the same `gateways.tsv` and `services.tsv`
   across a complete `wg-agent` up, down, and up-again cycle. With the interface down,
   Archangel reported `interface-down`, retained all seven definitions, and sent no
