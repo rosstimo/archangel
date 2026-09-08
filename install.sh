@@ -159,6 +159,7 @@ install -d -m 0755 /usr/local/lib/archangel
 install -m 0644 "$SCRIPT_DIR/lib/archangel/"*.sh /usr/local/lib/archangel/
 install -m 0755 "$SCRIPT_DIR/bin/archangel-access" /usr/local/bin/archangel-access
 install -m 0755 "$SCRIPT_DIR/bin/archangel-diagnostic" /usr/local/bin/archangel-diagnostic
+install -m 0755 "$SCRIPT_DIR/bin/archangel-hermes" /usr/local/bin/archangel-hermes
 install -m 0755 "$SCRIPT_DIR/bin/archangel-services" /usr/local/bin/archangel-services
 install -m 0755 "$SCRIPT_DIR/uninstall.sh" /usr/local/bin/archangel-uninstall
 
@@ -217,6 +218,7 @@ say
 say "Installed:"
 say "  /usr/local/bin/archangel-access"
 say "  /usr/local/bin/archangel-diagnostic"
+say "  /usr/local/bin/archangel-hermes"
 say "  /usr/local/bin/archangel-services"
 say "  /usr/local/bin/archangel-uninstall"
 say "  /usr/local/lib/archangel"
@@ -231,11 +233,35 @@ say "Hermes installed by Archangel: ${ARCHANGEL_HERMES_INSTALLED:-unknown}"
 say "Systemd linger enabled by Archangel: ${ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL:-no}"
 [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]] && say "Hermes executable: $ARCHANGEL_HERMES_BIN"
 say
-say "Useful next commands:"
+say "What to do next"
+say "---------------"
+say "Archangel:"
 say "  sudo archangel-access status"
+say "      Review the agent's filesystem access."
 say "  sudo archangel-services status"
+say "      Review saved/discovered services."
 say "  sudo archangel-services discover"
+say "      Add or change services later."
 say "  sudo -u $agent_user -H archangel-diagnostic"
+say "      Run the read-only host diagnostic as the agent."
+if [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]]; then
+    say
+    say "Hermes (runs as '$agent_user' through Archangel):"
+    say "  archangel-hermes"
+say "      Start an interactive terminal chat with the agent."
+    say "  archangel-hermes chat -q \"Inspect this system and report anything actionable.\""
+    say "      Run a single agent task without entering interactive chat."
+    say "  archangel-hermes dashboard --no-open"
+    say "      Start the local web dashboard, then open http://127.0.0.1:9119 in your browser."
+    say "  archangel-hermes setup"
+    say "      Continue or rerun the full Hermes setup wizard."
+    say "  archangel-hermes model"
+    say "      Choose or change the model/provider."
+    say "  archangel-hermes memory setup"
+    say "      Configure Hermes memory, including Honcho when desired."
+    say "  archangel-hermes gateway install"
+    say "      Install/configure the Hermes messaging and cron gateway service."
+fi
 say
 say "To share a config tree later:"
 say "  sudo archangel-access grant rw /home/$owner_user/.config/hypr"
