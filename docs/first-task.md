@@ -54,10 +54,48 @@ This checks basic identity, uptime, memory, filesystems, failed systemd units,
 recent journal warnings/errors when available, and a small amount of package
 state. It does not attempt repairs.
 
-## 3. Suggested first agent prompt
+## 3. Start Hermes in the correct agent context
 
-Once an agent runtime is installed under the dedicated account, a useful first
-request is:
+When Hermes is installed, use `archangel-hermes` from the human account rather
+than invoking the agent account's Hermes executable directly. The launcher drops
+into the configured agent identity, resets `HOME` and the working directory, and
+then passes the remaining arguments through to Hermes.
+
+Start an interactive terminal conversation:
+
+```bash
+archangel-hermes
+```
+
+Or send a single task without entering interactive chat:
+
+```bash
+archangel-hermes chat -q \
+  "Evaluate this Linux system's health using read-only commands. Run archangel-diagnostic first. Do not make changes."
+```
+
+For the browser management/chat interface, start the dashboard without asking
+the isolated account to open a graphical browser:
+
+```bash
+archangel-hermes dashboard --no-open
+```
+
+Then open `http://127.0.0.1:9119` in the human user's browser. Stop the foreground
+dashboard with `Ctrl+C` when finished.
+
+Setup that was skipped during Archangel installation can also be revisited later:
+
+```bash
+archangel-hermes setup
+archangel-hermes model
+archangel-hermes memory setup
+archangel-hermes gateway install
+```
+
+## 4. Suggested first agent prompt
+
+A useful first request is:
 
 > Evaluate this Linux system's health using read-only commands. Start by running
 > `archangel-diagnostic`. Inspect failed services, current-boot warnings and
@@ -69,7 +107,7 @@ The point of the first run is not to prove that the agent can fix the machine.
 It is to verify that it has enough visibility to diagnose it without silently
 crossing the permissions boundary.
 
-## 4. Revoke a grant
+## 5. Revoke a grant
 
 ```bash
 sudo archangel-access revoke "$HOME/.config/nvim"
