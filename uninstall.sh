@@ -40,6 +40,8 @@ journal_was_member=unknown
 acl_installed_by_archangel=unknown
 hermes_installed_by_archangel=unknown
 linger_enabled_by_archangel=unknown
+dashboard_unit_created=unknown
+dashboard_enabled_by_archangel=unknown
 hermes_bin=
 hermes_home=
 if [[ -r "$INSTALL_STATE" ]]; then
@@ -50,6 +52,8 @@ if [[ -r "$INSTALL_STATE" ]]; then
     acl_installed_by_archangel=${ARCHANGEL_ACL_INSTALLED_BY_ARCHANGEL:-unknown}
     hermes_installed_by_archangel=${ARCHANGEL_HERMES_INSTALLED:-unknown}
     linger_enabled_by_archangel=${ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL:-unknown}
+    dashboard_unit_created=${ARCHANGEL_DASHBOARD_UNIT_CREATED:-unknown}
+    dashboard_enabled_by_archangel=${ARCHANGEL_DASHBOARD_ENABLED_BY_ARCHANGEL:-unknown}
     hermes_bin=${ARCHANGEL_HERMES_BIN:-}
     hermes_home=${ARCHANGEL_HERMES_HOME:-}
 fi
@@ -60,6 +64,24 @@ if getent passwd "$ARCHANGEL_AGENT_USER" >/dev/null; then
     agent_uid=$(id -u "$ARCHANGEL_AGENT_USER")
     agent_home=$(getent passwd "$ARCHANGEL_AGENT_USER" | cut -d: -f6)
 fi
+
+agent_systemctl() {
+    [[ "$agent_uid" != unknown && -n "$agent_home" ]] || return 1
+    local runtime="/run/user/$agent_uid" i
+    if [[ ! -S "$runtime/bus" ]]; then
+        systemctl start "user@$agent_uid.service" >/dev/null 2>&1 || true
+        for ((i=0; i<25; i++)); do
+            [[ -S "$runtime/bus" ]] && break
+            sleep 0.2
+        done
+    fi
+    [[ -S "$runtime/bus" ]] || return 1
+    runuser -u "$ARCHANGEL_AGENT_USER" -- env \
+        HOME="$agent_home" USER="$ARCHANGEL_AGENT_USER" LOGNAME="$ARCHANGEL_AGENT_USER" \
+        PATH="$agent_home/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+        XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+        systemctl --user "$@"
+}
 
 access_tool=/usr/local/bin/archangel-access
 if [[ ! -x "$access_tool" && -x "$SCRIPT_DIR/bin/archangel-access" ]]; then access_tool="$SCRIPT_DIR/bin/archangel-access"; fi
@@ -122,6 +144,24 @@ if [[ "$remove_agent" == yes ]]; then
     fi
 fi
 
+# Dashboard service provenance is independent of Hermes runtime provenance. If
+# Archangel created the user unit, remove it. If the unit pre-existed but
+# Archangel enabled it persistently, restore that enablement state by disabling
+# it while leaving the user's unit file untouched.
+if getent passwd "$ARCHANGEL_AGENT_USER" >/dev/null && [[ -n "$agent_home" ]]; then
+    dashboard_unit="$agent_home/.config/systemd/user/hermes-dashboard.service"
+    if [[ "$dashboard_unit_created" == yes ]]; then
+        say "Removing the Hermes dashboard user service created by Archangel."
+        agent_systemctl disable --now hermes-dashboard.service >/dev/null 2>&1 || true
+        rm -f "$dashboard_unit"
+        agent_systemctl daemon-reload >/dev/null 2>&1 || true
+    elif [[ "$dashboard_enabled_by_archangel" == yes ]]; then
+        say "Disabling the pre-existing Hermes dashboard service that Archangel enabled."
+        agent_systemctl disable --now hermes-dashboard.service >/dev/null 2>&1 || \
+            say "Could not disable the dashboard service automatically; inspect it manually."
+    fi
+fi
+
 # If Archangel installed Hermes and the account is being preserved, offer to
 # remove only the Hermes runtime. Upstream `hermes uninstall --yes` keeps user
 # configuration/data unless --full is requested, which Archangel never assumes.
@@ -164,6 +204,7 @@ if [[ "$remove_agent" == yes ]]; then
 fi
 
 rm -f /usr/local/bin/archangel-access
+rm -f /usr/local/bin/archangel-dashboard
 rm -f /usr/local/bin/archangel-diagnostic
 rm -f /usr/local/bin/archangel-hermes
 rm -f /usr/local/bin/archangel-services
