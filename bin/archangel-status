@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE=${ARCHANGEL_CONFIG:-/etc/archangel.conf}
+STATE_DIR=${ARCHANGEL_STATE_DIR:-/var/lib/archangel}
+LIB_DIR=${ARCHANGEL_LIB_DIR:-/usr/local/lib/archangel}
+INSTALL_STATE="$STATE_DIR/install.env"
+DASHBOARD_URL=${ARCHANGEL_DASHBOARD_URL:-http://127.0.0.1:9119}
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  archangel-status
+  archangel-status --probe
+
+Shows a live summary of the current Archangel installation. The default view is
+fast and does not probe service endpoints. Use --probe to add HTTP reachability
+checks from the configured agent account.
+USAGE
+}
+
+die() { printf 'archangel-status: %s\n' "$*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+ask() { printf '%s' "${2:-}"; }
+yes_no() { return 1; }
+
+probe=no
+case "${1:-}" in
+    '') ;;
+    --probe) probe=yes ;;
+    -h|--help|help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+esac
+[[ $# -le 1 ]] || { usage >&2; exit 2; }
+
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    exec sudo env \
+        ARCHANGEL_CONFIG="$CONFIG_FILE" \
+        ARCHANGEL_STATE_DIR="$STATE_DIR" \
+        ARCHANGEL_LIB_DIR="$LIB_DIR" \
+        ARCHANGEL_DASHBOARD_URL="$DASHBOARD_URL" \
+        "$0" "$@"
+fi
+
+[[ -r "$CONFIG_FILE" ]] || die "missing $CONFIG_FILE"
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+: "${ARCHANGEL_AGENT_USER:?ARCHANGEL_AGENT_USER is not set}"
+: "${ARCHANGEL_OWNER_USER:?ARCHANGEL_OWNER_USER is not set}"
+[[ "$ARCHANGEL_AGENT_USER" != root ]] || die "refusing to use root as the configured agent"
+
+[[ -r "$LIB_DIR/discovery.sh" ]] || die "missing $LIB_DIR/discovery.sh"
+[[ -r "$LIB_DIR/hermes.sh" ]] || die "missing $LIB_DIR/hermes.sh"
+# shellcheck disable=SC1090
+source "$LIB_DIR/discovery.sh"
+# shellcheck disable=SC1090
+source "$LIB_DIR/hermes.sh"
+
+ARCHANGEL_SERVICES_FILE="$STATE_DIR/services.tsv"
+ARCHANGEL_GATEWAYS_FILE="$STATE_DIR/gateways.tsv"
+ARCHANGEL_HERMES_BIN=$(archangel_hermes_bin || true)
+agent_home=$(archangel_agent_home)
+agent_uid=$(archangel_agent_uid)
+
+hermes_origin=unknown
+if [[ -r "$INSTALL_STATE" ]]; then
+    # shellcheck disable=SC1090
+    source "$INSTALL_STATE"
+    hermes_origin=${ARCHANGEL_HERMES_INSTALLED:-unknown}
+fi
+
+printf 'Archangel status\n'
+printf '================\n'
+
+printf '\nIdentity\n'
+printf '--------\n'
+printf 'Human owner:       %-18s %s\n' "$ARCHANGEL_OWNER_USER" "$(getent passwd "$ARCHANGEL_OWNER_USER" >/dev/null 2>&1 && printf present || printf MISSING)"
+printf 'Agent account:     %-18s uid=%s\n' "$ARCHANGEL_AGENT_USER" "$agent_uid"
+printf 'Agent home:        %s\n' "$agent_home"
+printf 'Journal access:    '
+if id -nG "$ARCHANGEL_AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx systemd-journal; then
+    printf 'enabled\n'
+else
+    printf 'not enabled\n'
+fi
+printf 'Sudo authority:    '
+sudo_listing=$(sudo -l -U "$ARCHANGEL_AGENT_USER" 2>/dev/null || true)
+if grep -Eq '^[[:space:]]*\([^)]*\)[[:space:]]+' <<<"$sudo_listing"; then
+    printf 'present from host policy (see: sudo archangel-access status)\n'
+else
+    printf 'none detected\n'
+fi
+
+printf '\nFilesystem access\n'
+printf '-----------------\n'
+if [[ -s "$STATE_DIR/grants.tsv" ]]; then
+    while IFS=$'\t' read -r grant_id mode path; do
+        [[ -n "${grant_id:-}" ]] || continue
+        printf '  %-2s  %s\n' "${mode^^}" "$path"
+    done < "$STATE_DIR/grants.tsv"
+else
+    printf '  (no managed grants)\n'
+fi
+printf 'Detailed ACL/traversal state: sudo archangel-access status\n'
+
+printf '\nHermes\n'
+printf '------\n'
+if [[ -n "$ARCHANGEL_HERMES_BIN" ]]; then
+    hermes_version=$(archangel_run_as_agent "$ARCHANGEL_HERMES_BIN" --version 2>/dev/null | head -n 1 || true)
+    printf 'Executable:         %s\n' "$ARCHANGEL_HERMES_BIN"
+    printf 'Version:            %s\n' "${hermes_version:-unknown}"
+    printf 'Installed by Archangel: %s\n' "$hermes_origin"
+    printf 'Config/data:        %s/.hermes\n' "$agent_home"
+else
+    printf 'Hermes:             not installed for %s\n' "$ARCHANGEL_AGENT_USER"
+fi
+
+printf '\nAgent services\n'
+printf '--------------\n'
+printf 'User manager:       '
+if systemctl is-active --quiet "user@$agent_uid.service" 2>/dev/null; then
+    printf 'active\n'
+    user_manager=yes
+else
+    printf 'inactive/unavailable\n'
+    user_manager=no
+fi
+printf 'Systemd linger:     '
+if command -v loginctl >/dev/null 2>&1 && \
+   loginctl show-user "$ARCHANGEL_AGENT_USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+    printf 'enabled\n'
+    linger=yes
+else
+    printf 'disabled\n'
+    linger=no
+fi
+
+dashboard_unit="$agent_home/.config/systemd/user/hermes-dashboard.service"
+if [[ -r "$dashboard_unit" ]]; then
+    printf 'Dashboard unit:     installed\n'
+    if [[ "$user_manager" == yes ]]; then
+        dashboard_enabled=$(archangel_run_as_agent systemctl --user is-enabled hermes-dashboard.service 2>/dev/null || true)
+        dashboard_active=$(archangel_run_as_agent systemctl --user is-active hermes-dashboard.service 2>/dev/null || true)
+    else
+        dashboard_enabled=unknown
+        dashboard_active=unknown
+    fi
+    printf 'Dashboard enabled:  %s\n' "${dashboard_enabled:-unknown}"
+    printf 'Dashboard running:  %s\n' "${dashboard_active:-unknown}"
+    printf 'Dashboard URL:      %s\n' "$DASHBOARD_URL"
+else
+    printf 'Dashboard unit:     not installed\n'
+    dashboard_active=not-installed
+fi
+
+printf '\nServices\n'
+printf '--------\n'
+if [[ -r "$ARCHANGEL_SERVICES_FILE" ]]; then
+    archangel_services_status
+else
+    printf '(no service registry yet)\n'
+fi
+
+printf '\nSaved gateways\n'
+printf '--------------\n'
+if [[ -r "$ARCHANGEL_GATEWAYS_FILE" ]] && awk -F '\t' '$1 !~ /^#/ && NF >= 2 {found=1} END {exit !found}' "$ARCHANGEL_GATEWAYS_FILE"; then
+    archangel_gateways_status
+else
+    printf '(none)\n'
+fi
+
+if [[ "$probe" == yes ]]; then
+    printf '\nLive service reachability as %s\n' "$ARCHANGEL_AGENT_USER"
+    printf '%*s\n' "$((29 + ${#ARCHANGEL_AGENT_USER}))" '' | tr ' ' '-'
+    if [[ -r "$ARCHANGEL_SERVICES_FILE" ]]; then
+        archangel_verify_selected_services
+    else
+        printf '(no services to probe)\n'
+    fi
+fi
+
+printf '\nUseful next commands\n'
+printf '--------------------\n'
+printf '  archangel-status --probe\n'
+printf '      Add live HTTP reachability checks from the agent account.\n'
+if [[ -n "$ARCHANGEL_HERMES_BIN" ]]; then
+    printf '  archangel-hermes\n'
+    printf '      Start an interactive conversation with the agent.\n'
+    printf '  archangel-hermes setup\n'
+    printf '      Continue or revisit Hermes configuration.\n'
+    printf '  archangel-hermes doctor\n'
+    printf '      Run Hermes diagnostics.\n'
+fi
+if [[ -r "$dashboard_unit" ]]; then
+    printf '  archangel-dashboard\n'
+    printf '      Start/open the local Hermes dashboard in your browser.\n'
+    if [[ "${dashboard_active:-}" == active ]]; then
+        printf '  archangel-dashboard stop\n'
+        printf '      Stop the currently running dashboard.\n'
+    fi
+fi
+printf '  sudo archangel-services discover\n'
+printf '      Add or change local/LAN/VPN services.\n'
+printf '  sudo archangel-access status\n'
+printf '      Inspect detailed filesystem access and host sudo policy.\n'
+printf '  sudo archangel-uninstall\n'
+printf '      Remove Archangel and restore managed host changes.\n'
