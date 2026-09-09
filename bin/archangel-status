@@ -72,7 +72,7 @@ printf 'Archangel status\n'
 printf '================\n'
 
 printf '\nIdentity\n'
-printf '--------\n'
+printf '%s\n' '--------'
 owner_state=$(getent passwd "$ARCHANGEL_OWNER_USER" >/dev/null 2>&1 && printf present || printf MISSING)
 printf 'Human owner:       %-18s %s\n' "$ARCHANGEL_OWNER_USER" "$owner_state"
 
@@ -104,7 +104,7 @@ else
 fi
 
 printf '\nFilesystem access\n'
-printf '-----------------\n'
+printf '%s\n' '-----------------'
 if [[ -s "$STATE_DIR/grants.tsv" ]]; then
     while IFS=$'\t' read -r grant_id mode path; do
         [[ -n "${grant_id:-}" ]] || continue
@@ -116,7 +116,7 @@ fi
 printf 'Detailed ACL/traversal state: sudo archangel-access status\n'
 
 printf '\nHermes\n'
-printf '------\n'
+printf '%s\n' '------'
 if [[ -n "$ARCHANGEL_HERMES_BIN" ]]; then
     hermes_version=$(archangel_run_as_agent "$ARCHANGEL_HERMES_BIN" --version 2>/dev/null | head -n 1 || true)
     printf 'Executable:         %s\n' "$ARCHANGEL_HERMES_BIN"
@@ -128,7 +128,7 @@ else
 fi
 
 printf '\nAgent services\n'
-printf '--------------\n'
+printf '%s\n' '--------------'
 printf 'User manager:       '
 if systemctl is-active --quiet "user@$agent_uid.service" 2>/dev/null; then
     printf 'active\n'
@@ -164,7 +164,7 @@ else
 fi
 
 printf '\nServices\n'
-printf '--------\n'
+printf '%s\n' '--------'
 if [[ -r "$ARCHANGEL_SERVICES_FILE" ]]; then
     archangel_services_status
 else
@@ -172,7 +172,7 @@ else
 fi
 
 printf '\nSaved gateways\n'
-printf '--------------\n'
+printf '%s\n' '--------------'
 if [[ -r "$ARCHANGEL_GATEWAYS_FILE" ]] && awk -F '\t' '$1 !~ /^#/ && NF >= 2 {found=1} END {exit !found}' "$ARCHANGEL_GATEWAYS_FILE"; then
     archangel_gateways_status
 else
@@ -184,13 +184,13 @@ if [[ "$probe" == yes ]]; then
         archangel_verify_selected_services
     else
         printf '\nService reachability\n'
-        printf '--------------------\n'
+        printf '%s\n' '--------------------'
         printf '(no services to probe)\n'
     fi
 fi
 
 printf '\nUseful next commands\n'
-printf '--------------------\n'
+printf '%s\n' '--------------------'
 if [[ "$probe" == no ]]; then
     printf '  archangel-status --probe\n'
     printf '      Add live HTTP reachability checks from the agent account.\n'
