@@ -22,6 +22,7 @@ Arch.
 ## Documentation
 
 - [Installation and usage](docs/usage.md): setup, service management, access commands, recovery, and uninstall.
+- [Live status overview](docs/status.md): rebuild the current Archangel/Hermes state and useful next commands at any time.
 - [Hermes service discovery](docs/service-discovery.md): local/LAN/VPN discovery, direct URLs, stored state, and Hermes integration.
 - [Hermes dashboard](docs/dashboard.md): persistent or on-demand local dashboard lifecycle and controls.
 - [First task](docs/first-task.md): inspect the system and verify the agent's access.
