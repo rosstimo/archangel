@@ -74,15 +74,28 @@ archangel-hermes chat -q \
   "Evaluate this Linux system's health using read-only commands. Run archangel-diagnostic first. Do not make changes."
 ```
 
-For the browser management/chat interface, start the dashboard without asking
-the isolated account to open a graphical browser:
+For the browser management/chat interface, use Archangel's dashboard wrapper:
 
 ```bash
-archangel-hermes dashboard --no-open
+archangel-dashboard
 ```
 
-Then open `http://127.0.0.1:9119` in the human user's browser. Stop the foreground
-dashboard with `Ctrl+C` when finished.
+That starts the Hermes dashboard as the isolated agent account and opens
+`http://127.0.0.1:9119` in the human user's default browser. If the installer was
+configured to keep the dashboard persistent, the command simply ensures the
+service is running and opens another browser tab.
+
+Useful dashboard controls are:
+
+```bash
+archangel-dashboard stop
+archangel-dashboard restart
+archangel-dashboard status
+```
+
+If persistence was declined during installation, `stop` leaves the dashboard
+off until the next manual `archangel-dashboard` start. See
+[`dashboard.md`](dashboard.md) for lifecycle and ownership details.
 
 Setup that was skipped during Archangel installation can also be revisited later:
 
