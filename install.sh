@@ -256,6 +256,7 @@ install -m 0755 "$SCRIPT_DIR/bin/archangel-dashboard" /usr/local/bin/archangel-d
 install -m 0755 "$SCRIPT_DIR/bin/archangel-diagnostic" /usr/local/bin/archangel-diagnostic
 install -m 0755 "$SCRIPT_DIR/bin/archangel-hermes" /usr/local/bin/archangel-hermes
 install -m 0755 "$SCRIPT_DIR/bin/archangel-services" /usr/local/bin/archangel-services
+install -m 0755 "$SCRIPT_DIR/bin/archangel-status" /usr/local/bin/archangel-status
 install -m 0755 "$SCRIPT_DIR/uninstall.sh" /usr/local/bin/archangel-uninstall
 
 say
@@ -326,6 +327,7 @@ say "  /usr/local/bin/archangel-dashboard"
 say "  /usr/local/bin/archangel-diagnostic"
 say "  /usr/local/bin/archangel-hermes"
 say "  /usr/local/bin/archangel-services"
+say "  /usr/local/bin/archangel-status"
 say "  /usr/local/bin/archangel-uninstall"
 say "  /usr/local/lib/archangel"
 say "  $CONFIG_FILE"
@@ -345,6 +347,10 @@ say
 say "What to do next"
 say "---------------"
 say "Archangel:"
+say "  archangel-status"
+say "      Show the current Archangel/Hermes overview again at any time."
+say "  archangel-status --probe"
+say "      Include live service reachability checks from the agent account."
 say "  sudo archangel-access status"
 say "      Review the agent's filesystem access."
 say "  sudo archangel-services status"
@@ -357,7 +363,7 @@ if [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]]; then
     say
     say "Hermes dashboard:"
     say "  archangel-dashboard"
-    say "      Start the local dashboard and open it in your default browser."
+say "      Start the local dashboard and open it in your default browser."
     say "  archangel-dashboard stop"
     say "      Stop the dashboard."
     say "  archangel-dashboard status"
@@ -367,7 +373,7 @@ if [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]]; then
     say
     say "Hermes (runs as '$agent_user' through Archangel):"
     say "  archangel-hermes"
-    say "      Start an interactive terminal chat with the agent."
+say "      Start an interactive terminal chat with the agent."
     say "  archangel-hermes chat -q \"Inspect this system and report anything actionable.\""
     say "      Run a single agent task without entering interactive chat."
     say "  archangel-hermes setup"
@@ -386,4 +392,5 @@ say
 say "To remove Archangel cleanly:"
 say "  sudo archangel-uninstall"
 say
+say "Run 'archangel-status' any time to rebuild this overview from current state."
 say "See docs/first-task.md for a cautious first agent task."
