@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE=${ARCHANGEL_CONFIG:-/etc/archangel.conf}
+LIB_DIR=${ARCHANGEL_LIB_DIR:-/usr/local/lib/archangel}
+DASHBOARD_URL=${ARCHANGEL_DASHBOARD_URL:-http://127.0.0.1:9119}
+SERVICE_NAME=hermes-dashboard.service
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  archangel-dashboard [start]
+  archangel-dashboard stop
+  archangel-dashboard restart
+  archangel-dashboard status
+  archangel-dashboard url
+
+With no command, Archangel starts the Hermes dashboard as the configured agent
+and opens it in the current human user's default browser. The dashboard remains
+bound to localhost. When the dashboard was not enabled persistently during
+installation, 'stop' shuts it down until the next manual start.
+USAGE
+}
+
+die() { printf 'archangel-dashboard: %s\n' "$*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+ask() { printf '%s' "${2:-}"; }
+yes_no() { return 1; }
+
+open_browser() {
+    if command -v xdg-open >/dev/null 2>&1; then
+        nohup xdg-open "$DASHBOARD_URL" >/dev/null 2>&1 &
+        return 0
+    fi
+    printf 'Dashboard is available at %s\n' "$DASHBOARD_URL"
+    printf 'xdg-open is unavailable; open that URL in your browser.\n'
+}
+
+command_name=${1:-start}
+case "$command_name" in
+    start|stop|restart|status|url) ;;
+    -h|--help|help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+esac
+
+if [[ "$command_name" == url ]]; then
+    printf '%s\n' "$DASHBOARD_URL"
+    exit 0
+fi
+
+# Keep browser launching in the human desktop session. Only the service-control
+# portion is elevated; otherwise xdg-open would run as root or the agent user.
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    case "$command_name" in
+        start|restart)
+            sudo env \
+                ARCHANGEL_CONFIG="$CONFIG_FILE" \
+                ARCHANGEL_LIB_DIR="$LIB_DIR" \
+                ARCHANGEL_DASHBOARD_URL="$DASHBOARD_URL" \
+                "$0" "$command_name"
+            open_browser
+            exit 0
+            ;;
+        stop|status)
+            exec sudo env \
+                ARCHANGEL_CONFIG="$CONFIG_FILE" \
+                ARCHANGEL_LIB_DIR="$LIB_DIR" \
+                ARCHANGEL_DASHBOARD_URL="$DASHBOARD_URL" \
+                "$0" "$command_name"
+            ;;
+    esac
+fi
+
+[[ -r "$CONFIG_FILE" ]] || die "missing $CONFIG_FILE"
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+: "${ARCHANGEL_AGENT_USER:?ARCHANGEL_AGENT_USER is not set}"
+[[ "$ARCHANGEL_AGENT_USER" != root ]] || die "refusing to manage a root-owned Hermes dashboard"
+
+[[ -r "$LIB_DIR/hermes.sh" ]] || die "missing $LIB_DIR/hermes.sh"
+# shellcheck disable=SC1090
+source "$LIB_DIR/hermes.sh"
+
+ARCHANGEL_HERMES_BIN=$(archangel_hermes_bin || true)
+[[ -n "$ARCHANGEL_HERMES_BIN" ]] || \
+    die "Hermes is not installed for the configured agent '$ARCHANGEL_AGENT_USER'"
+
+unit="$(archangel_agent_home)/.config/systemd/user/$SERVICE_NAME"
+[[ -r "$unit" ]] || die "dashboard service is not installed; rerun the current Archangel installer"
+
+archangel_prepare_user_systemd no >/dev/null || \
+    die "the '$ARCHANGEL_AGENT_USER' user systemd manager is unavailable"
+
+case "$command_name" in
+    start)
+        archangel_run_as_agent systemctl --user start "$SERVICE_NAME"
+        say "Hermes dashboard started at $DASHBOARD_URL"
+        ;;
+    stop)
+        archangel_run_as_agent systemctl --user stop "$SERVICE_NAME"
+        say "Hermes dashboard stopped."
+        ;;
+    restart)
+        archangel_run_as_agent systemctl --user restart "$SERVICE_NAME"
+        say "Hermes dashboard restarted at $DASHBOARD_URL"
+        ;;
+    status)
+        archangel_run_as_agent systemctl --user status "$SERVICE_NAME" --no-pager
+        ;;
+esac
