@@ -82,6 +82,75 @@ source "$SCRIPT_DIR/lib/archangel/discovery.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/archangel/hermes.sh"
 
+install_dashboard_service() {
+    local home group unit tmp was_enabled=no
+    home=$(archangel_agent_home)
+    group=$(id -gn "$ARCHANGEL_AGENT_USER")
+    unit="$home/.config/systemd/user/hermes-dashboard.service"
+    ARCHANGEL_DASHBOARD_UNIT_CREATED=no
+    ARCHANGEL_DASHBOARD_ENABLED_BY_ARCHANGEL=no
+    ARCHANGEL_DASHBOARD_PERSISTENT=no
+
+    install -d -o "$ARCHANGEL_AGENT_USER" -g "$group" -m 0755 "$home/.config/systemd/user"
+
+    if [[ -e "$unit" ]]; then
+        say "An existing Hermes dashboard user service is already present; preserving it."
+    else
+        tmp=$(mktemp)
+        cat > "$tmp" <<UNIT
+[Unit]
+Description=Hermes Web Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$home
+EnvironmentFile=-$home/.hermes/.env
+ExecStart=$ARCHANGEL_HERMES_BIN dashboard --no-open --host 127.0.0.1 --port 9119
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+        install -o "$ARCHANGEL_AGENT_USER" -g "$group" -m 0644 "$tmp" "$unit"
+        rm -f "$tmp"
+        ARCHANGEL_DASHBOARD_UNIT_CREATED=yes
+        say "Installed Hermes dashboard user service for '$ARCHANGEL_AGENT_USER'."
+    fi
+
+    archangel_run_as_agent systemctl --user daemon-reload || {
+        say "Could not reload '$ARCHANGEL_AGENT_USER' user services; dashboard control may need to be retried later."
+        return 0
+    }
+
+    if archangel_run_as_agent systemctl --user is-enabled hermes-dashboard.service >/dev/null 2>&1; then
+        was_enabled=yes
+    fi
+
+    if yes_no "Run the Hermes web dashboard persistently on this machine?" N; then
+        if ! loginctl show-user "$ARCHANGEL_AGENT_USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+            if yes_no "Persistent dashboard requires systemd linger. Enable linger for '$ARCHANGEL_AGENT_USER' now?" Y; then
+                archangel_prepare_user_systemd yes || {
+                    say "Could not prepare linger; leaving the dashboard installed for manual start/stop."
+                    return 0
+                }
+            else
+                say "Dashboard service installed but not enabled persistently."
+                return 0
+            fi
+        fi
+
+        archangel_run_as_agent systemctl --user enable --now hermes-dashboard.service
+        [[ "$was_enabled" == no ]] && ARCHANGEL_DASHBOARD_ENABLED_BY_ARCHANGEL=yes
+        ARCHANGEL_DASHBOARD_PERSISTENT=yes
+        say "Hermes dashboard is running persistently at http://127.0.0.1:9119"
+    else
+        say "Dashboard service installed but left disabled. Run 'archangel-dashboard' whenever you want it."
+    fi
+}
+
 if [[ -e "$CONFIG_FILE" || -e "$INSTALL_STATE" ]]; then
     die "Archangel already appears to be installed. Run ./uninstall.sh before changing the configured agent account."
 fi
@@ -158,6 +227,7 @@ say "[2/6] Archangel tools"
 install -d -m 0755 /usr/local/lib/archangel
 install -m 0644 "$SCRIPT_DIR/lib/archangel/"*.sh /usr/local/lib/archangel/
 install -m 0755 "$SCRIPT_DIR/bin/archangel-access" /usr/local/bin/archangel-access
+install -m 0755 "$SCRIPT_DIR/bin/archangel-dashboard" /usr/local/bin/archangel-dashboard
 install -m 0755 "$SCRIPT_DIR/bin/archangel-diagnostic" /usr/local/bin/archangel-diagnostic
 install -m 0755 "$SCRIPT_DIR/bin/archangel-hermes" /usr/local/bin/archangel-hermes
 install -m 0755 "$SCRIPT_DIR/bin/archangel-services" /usr/local/bin/archangel-services
@@ -169,6 +239,9 @@ ARCHANGEL_HERMES_INSTALLED=no
 ARCHANGEL_HERMES_BIN=
 ARCHANGEL_HERMES_HOME="$(archangel_agent_home)/.hermes"
 ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL=no
+ARCHANGEL_DASHBOARD_UNIT_CREATED=no
+ARCHANGEL_DASHBOARD_ENABLED_BY_ARCHANGEL=no
+ARCHANGEL_DASHBOARD_PERSISTENT=no
 archangel_install_hermes || say "Hermes installation reported an error; Archangel setup can continue."
 
 if [[ -n "${ARCHANGEL_HERMES_BIN:-}" && -d /run/systemd/system ]]; then
@@ -176,8 +249,12 @@ if [[ -n "${ARCHANGEL_HERMES_BIN:-}" && -d /run/systemd/system ]]; then
     if yes_no "Allow Hermes user services for '$agent_user' to keep running while logged out?" Y; then
         linger_choice=yes
     fi
-    archangel_prepare_user_systemd "$linger_choice" || \
+    if archangel_prepare_user_systemd "$linger_choice"; then
+        install_dashboard_service
+    else
         say "Hermes is installed, but its user systemd service manager is not ready yet."
+        say "The dashboard can still be launched directly with 'archangel-hermes dashboard'."
+    fi
 fi
 
 cat > "$INSTALL_STATE" <<CFG
@@ -191,6 +268,9 @@ ARCHANGEL_HERMES_INSTALLED='${ARCHANGEL_HERMES_INSTALLED:-unknown}'
 ARCHANGEL_HERMES_BIN='${ARCHANGEL_HERMES_BIN:-}'
 ARCHANGEL_HERMES_HOME='${ARCHANGEL_HERMES_HOME:-}'
 ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL='${ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL:-no}'
+ARCHANGEL_DASHBOARD_UNIT_CREATED='${ARCHANGEL_DASHBOARD_UNIT_CREATED:-no}'
+ARCHANGEL_DASHBOARD_ENABLED_BY_ARCHANGEL='${ARCHANGEL_DASHBOARD_ENABLED_BY_ARCHANGEL:-no}'
+ARCHANGEL_DASHBOARD_PERSISTENT='${ARCHANGEL_DASHBOARD_PERSISTENT:-no}'
 CFG
 chmod 0640 "$INSTALL_STATE"
 
@@ -217,6 +297,7 @@ archangel_finish_hermes_setup
 say
 say "Installed:"
 say "  /usr/local/bin/archangel-access"
+say "  /usr/local/bin/archangel-dashboard"
 say "  /usr/local/bin/archangel-diagnostic"
 say "  /usr/local/bin/archangel-hermes"
 say "  /usr/local/bin/archangel-services"
@@ -231,7 +312,10 @@ say "Agent account created by Archangel: $agent_created"
 say "Journal access: $journal_enabled"
 say "Hermes installed by Archangel: ${ARCHANGEL_HERMES_INSTALLED:-unknown}"
 say "Systemd linger enabled by Archangel: ${ARCHANGEL_LINGER_ENABLED_BY_ARCHANGEL:-no}"
-[[ -n "${ARCHANGEL_HERMES_BIN:-}" ]] && say "Hermes executable: $ARCHANGEL_HERMES_BIN"
+if [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]]; then
+    say "Hermes executable: $ARCHANGEL_HERMES_BIN"
+    say "Hermes dashboard persistent: ${ARCHANGEL_DASHBOARD_PERSISTENT:-no}"
+fi
 say
 say "What to do next"
 say "---------------"
@@ -246,21 +330,29 @@ say "  sudo -u $agent_user -H archangel-diagnostic"
 say "      Run the read-only host diagnostic as the agent."
 if [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]]; then
     say
+    say "Hermes dashboard:"
+    say "  archangel-dashboard"
+say "      Start the local dashboard and open it in your default browser."
+    say "  archangel-dashboard stop"
+say "      Stop the dashboard."
+    say "  archangel-dashboard status"
+say "      Check whether the dashboard is running."
+    [[ "${ARCHANGEL_DASHBOARD_PERSISTENT:-no}" == yes ]] && \
+        say "  Persistent dashboard: http://127.0.0.1:9119"
+    say
     say "Hermes (runs as '$agent_user' through Archangel):"
     say "  archangel-hermes"
-say "      Start an interactive terminal chat with the agent."
+    say "      Start an interactive terminal chat with the agent."
     say "  archangel-hermes chat -q \"Inspect this system and report anything actionable.\""
     say "      Run a single agent task without entering interactive chat."
-    say "  archangel-hermes dashboard --no-open"
-    say "      Start the local web dashboard, then open http://127.0.0.1:9119 in your browser."
     say "  archangel-hermes setup"
     say "      Continue or rerun the full Hermes setup wizard."
     say "  archangel-hermes model"
     say "      Choose or change the model/provider."
     say "  archangel-hermes memory setup"
-    say "      Configure Hermes memory, including Honcho when desired."
+say "      Configure Hermes memory, including Honcho when desired."
     say "  archangel-hermes gateway install"
-    say "      Install/configure the Hermes messaging and cron gateway service."
+say "      Install/configure the Hermes messaging and cron gateway service."
 fi
 say
 say "To share a config tree later:"
