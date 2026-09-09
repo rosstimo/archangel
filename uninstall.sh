@@ -208,6 +208,7 @@ rm -f /usr/local/bin/archangel-dashboard
 rm -f /usr/local/bin/archangel-diagnostic
 rm -f /usr/local/bin/archangel-hermes
 rm -f /usr/local/bin/archangel-services
+rm -f /usr/local/bin/archangel-status
 rm -f /usr/local/bin/archangel-uninstall
 rm -rf /usr/local/lib/archangel
 rm -f "$CONFIG_FILE"
