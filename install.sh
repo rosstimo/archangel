@@ -83,7 +83,7 @@ source "$SCRIPT_DIR/lib/archangel/discovery.sh"
 source "$SCRIPT_DIR/lib/archangel/hermes.sh"
 
 install_dashboard_service() {
-    local home group unit tmp was_enabled=no
+    local home group unit tmp was_enabled=no linger_enabled=no
     home=$(archangel_agent_home)
     group=$(id -gn "$ARCHANGEL_AGENT_USER")
     unit="$home/.config/systemd/user/hermes-dashboard.service"
@@ -128,26 +128,51 @@ UNIT
     if archangel_run_as_agent systemctl --user is-enabled hermes-dashboard.service >/dev/null 2>&1; then
         was_enabled=yes
     fi
+    if command -v loginctl >/dev/null 2>&1 && \
+       loginctl show-user "$ARCHANGEL_AGENT_USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+        linger_enabled=yes
+    fi
+
+    if [[ "$was_enabled" == yes && "$linger_enabled" == yes ]]; then
+        ARCHANGEL_DASHBOARD_PERSISTENT=yes
+        archangel_run_as_agent systemctl --user start hermes-dashboard.service || true
+        say "Existing Hermes dashboard service is already persistent; preserving that state."
+        say "Hermes dashboard is available at http://127.0.0.1:9119"
+        return 0
+    fi
 
     if yes_no "Run the Hermes web dashboard persistently on this machine?" N; then
-        if ! loginctl show-user "$ARCHANGEL_AGENT_USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+        if [[ "$linger_enabled" != yes ]]; then
             if yes_no "Persistent dashboard requires systemd linger. Enable linger for '$ARCHANGEL_AGENT_USER' now?" Y; then
-                archangel_prepare_user_systemd yes || {
-                    say "Could not prepare linger; leaving the dashboard installed for manual start/stop."
-                    return 0
-                }
-            else
-                say "Dashboard service installed but not enabled persistently."
-                return 0
+                archangel_prepare_user_systemd yes || true
+                if command -v loginctl >/dev/null 2>&1 && \
+                   loginctl show-user "$ARCHANGEL_AGENT_USER" -p Linger --value 2>/dev/null | grep -qx yes; then
+                    linger_enabled=yes
+                fi
             fi
         fi
 
-        archangel_run_as_agent systemctl --user enable --now hermes-dashboard.service
-        [[ "$was_enabled" == no ]] && ARCHANGEL_DASHBOARD_ENABLED_BY_ARCHANGEL=yes
+        if [[ "$linger_enabled" != yes ]]; then
+            say "Systemd linger is not enabled; leaving the dashboard available for manual start/stop instead."
+            [[ "$was_enabled" == yes ]] && \
+                say "The pre-existing enabled state was preserved and was not changed by Archangel."
+            return 0
+        fi
+
+        if [[ "$was_enabled" == no ]]; then
+            archangel_run_as_agent systemctl --user enable --now hermes-dashboard.service
+            ARCHANGEL_DASHBOARD_ENABLED_BY_ARCHANGEL=yes
+        else
+            archangel_run_as_agent systemctl --user start hermes-dashboard.service
+        fi
         ARCHANGEL_DASHBOARD_PERSISTENT=yes
         say "Hermes dashboard is running persistently at http://127.0.0.1:9119"
     else
-        say "Dashboard service installed but left disabled. Run 'archangel-dashboard' whenever you want it."
+        if [[ "$was_enabled" == yes ]]; then
+            say "The pre-existing enabled dashboard state was preserved."
+        else
+            say "Dashboard service installed but left disabled. Run 'archangel-dashboard' whenever you want it."
+        fi
     fi
 }
 
@@ -332,11 +357,11 @@ if [[ -n "${ARCHANGEL_HERMES_BIN:-}" ]]; then
     say
     say "Hermes dashboard:"
     say "  archangel-dashboard"
-say "      Start the local dashboard and open it in your default browser."
+    say "      Start the local dashboard and open it in your default browser."
     say "  archangel-dashboard stop"
-say "      Stop the dashboard."
+    say "      Stop the dashboard."
     say "  archangel-dashboard status"
-say "      Check whether the dashboard is running."
+    say "      Check whether the dashboard is running."
     [[ "${ARCHANGEL_DASHBOARD_PERSISTENT:-no}" == yes ]] && \
         say "  Persistent dashboard: http://127.0.0.1:9119"
     say
@@ -350,9 +375,9 @@ say "      Check whether the dashboard is running."
     say "  archangel-hermes model"
     say "      Choose or change the model/provider."
     say "  archangel-hermes memory setup"
-say "      Configure Hermes memory, including Honcho when desired."
+    say "      Configure Hermes memory, including Honcho when desired."
     say "  archangel-hermes gateway install"
-say "      Install/configure the Hermes messaging and cron gateway service."
+    say "      Install/configure the Hermes messaging and cron gateway service."
 fi
 say
 say "To share a config tree later:"
