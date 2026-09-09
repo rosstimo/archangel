@@ -58,12 +58,11 @@ source "$LIB_DIR/hermes.sh"
 
 ARCHANGEL_SERVICES_FILE="$STATE_DIR/services.tsv"
 ARCHANGEL_GATEWAYS_FILE="$STATE_DIR/gateways.tsv"
-ARCHANGEL_HERMES_BIN=$(archangel_hermes_bin || true)
-agent_home=$(archangel_agent_home)
-agent_uid=$(archangel_agent_uid)
 
 hermes_origin=unknown
 if [[ -r "$INSTALL_STATE" ]]; then
+    # Source provenance first, then recompute live Hermes paths below so stale
+    # installation metadata cannot masquerade as current runtime state.
     # shellcheck disable=SC1090
     source "$INSTALL_STATE"
     hermes_origin=${ARCHANGEL_HERMES_INSTALLED:-unknown}
@@ -74,7 +73,20 @@ printf '================\n'
 
 printf '\nIdentity\n'
 printf '--------\n'
-printf 'Human owner:       %-18s %s\n' "$ARCHANGEL_OWNER_USER" "$(getent passwd "$ARCHANGEL_OWNER_USER" >/dev/null 2>&1 && printf present || printf MISSING)"
+owner_state=$(getent passwd "$ARCHANGEL_OWNER_USER" >/dev/null 2>&1 && printf present || printf MISSING)
+printf 'Human owner:       %-18s %s\n' "$ARCHANGEL_OWNER_USER" "$owner_state"
+
+if ! getent passwd "$ARCHANGEL_AGENT_USER" >/dev/null 2>&1; then
+    printf 'Agent account:     %-18s MISSING\n' "$ARCHANGEL_AGENT_USER"
+    printf '\nArchangel is configured for an agent account that no longer exists.\n'
+    printf 'Inspect %s and %s before making further changes.\n' "$CONFIG_FILE" "$STATE_DIR"
+    exit 1
+fi
+
+agent_home=$(archangel_agent_home)
+agent_uid=$(archangel_agent_uid)
+ARCHANGEL_HERMES_BIN=$(archangel_hermes_bin || true)
+
 printf 'Agent account:     %-18s uid=%s\n' "$ARCHANGEL_AGENT_USER" "$agent_uid"
 printf 'Agent home:        %s\n' "$agent_home"
 printf 'Journal access:    '
@@ -129,10 +141,8 @@ printf 'Systemd linger:     '
 if command -v loginctl >/dev/null 2>&1 && \
    loginctl show-user "$ARCHANGEL_AGENT_USER" -p Linger --value 2>/dev/null | grep -qx yes; then
     printf 'enabled\n'
-    linger=yes
 else
     printf 'disabled\n'
-    linger=no
 fi
 
 dashboard_unit="$agent_home/.config/systemd/user/hermes-dashboard.service"
@@ -170,19 +180,21 @@ else
 fi
 
 if [[ "$probe" == yes ]]; then
-    printf '\nLive service reachability as %s\n' "$ARCHANGEL_AGENT_USER"
-    printf '%*s\n' "$((29 + ${#ARCHANGEL_AGENT_USER}))" '' | tr ' ' '-'
     if [[ -r "$ARCHANGEL_SERVICES_FILE" ]]; then
         archangel_verify_selected_services
     else
+        printf '\nService reachability\n'
+        printf '--------------------\n'
         printf '(no services to probe)\n'
     fi
 fi
 
 printf '\nUseful next commands\n'
 printf '--------------------\n'
-printf '  archangel-status --probe\n'
-printf '      Add live HTTP reachability checks from the agent account.\n'
+if [[ "$probe" == no ]]; then
+    printf '  archangel-status --probe\n'
+    printf '      Add live HTTP reachability checks from the agent account.\n'
+fi
 if [[ -n "$ARCHANGEL_HERMES_BIN" ]]; then
     printf '  archangel-hermes\n'
     printf '      Start an interactive conversation with the agent.\n'
