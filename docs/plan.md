@@ -8,7 +8,7 @@ describes the project rather than acting as a changelog.
 
 ## Verified repository baseline
 
-Repository inspection on 2026-11-19:
+Repository inspection on 2026-11-19, before this plan was committed:
 
 - `main`: `96c1e01f9a` (2026-09-07).
 - `feature/hermes-service-discovery`: `b98b338da4` (2026-09-09), 53 commits
