@@ -26,6 +26,7 @@ Arch.
 - [Hermes service discovery](docs/service-discovery.md): local/LAN/VPN discovery, direct URLs, stored state, and Hermes integration.
 - [Hermes dashboard](docs/dashboard.md): persistent or on-demand local dashboard lifecycle and controls.
 - [First task](docs/first-task.md): inspect the system and verify the agent's access.
+- [Development plan](docs/plan.md): current priorities, milestones, and acceptance tests.
 - [Development progress](docs/progress.md): implementation status, review follow-up, and pending validation.
 
 ## License
