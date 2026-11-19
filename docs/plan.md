@@ -72,6 +72,29 @@ unattended-agent lifecycle has not been demonstrated.
 can be diagnosed and removed safely, and supported upstream Hermes commands
 are used.
 
+### 0A. Inventory existing systems before changing them
+
+- [ ] Run the read-only private host inventory on Jimmy and on the **new**
+  Jetson. Compare actual host state against historical Archangel records.
+- [ ] Record unique files, active services, package origins, Docker/Compose
+  data, NetworkManager/WireGuard dependencies, HQ gateways, and backup
+  ownership. Do not read secret values into agent-visible output.
+- [ ] Confirm the new Jetson's smaller-form-factor NVMe and the model, bus,
+  driver, and capabilities of its additional tensor/AI accelerator. Do not
+  assume it matches the original Jetson's hardware.
+- [ ] Implement approved encrypted backup and verified disposable restore of
+  data and host-specific settings, including recovery of remote-side VPN
+  enrollment. Keep private inventory, keyfiles, and credentials out of Git.
+- [ ] Leave the **original Jon** powered down and unchanged until restore,
+  rollback, and unique agent identity have been validated on test machines.
+
+See [host inventory and recovery experiments](recovery-inventory.md) for
+machine identities, safe test commands, security boundaries, and exit criteria.
+
+**Exit test:** Jimmy and the new Jetson have private, reviewed inventories,
+known unique-state candidates, and a testable recovery plan. Original Jon
+has not been touched.
+
 ### 1. Make first boot simple and autonomous
 
 - [ ] Provide one `archangel` entry point for `chat`, `ask`, `status`,
