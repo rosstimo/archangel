@@ -19,3 +19,8 @@ dist/
 __pycache__/
 *.py[cod]
 .venv/
+
+# Defense in depth: local discovery and backup outputs
+host-inventory-*/
+inventory-output/
+recovery-backups/
